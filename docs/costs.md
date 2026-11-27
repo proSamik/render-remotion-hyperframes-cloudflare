@@ -1,0 +1,104 @@
+# Costs, and how to measure your own
+
+## How Cloudflare bills a container
+
+Prices from https://developers.cloudflare.com/containers/platform/pricing/ (read 2026-11-27, Workers Paid plan):
+
+| Meter | Price | Billed on |
+| --- | --- | --- |
+| CPU | $0.000020 per vCPU-second | **active use** |
+| Memory | $0.0000025 per GiB-second | what the instance type provisions, while the instance runs |
+| Disk | $0.00000007 per GB-second | what the instance type provisions, while the instance runs |
+
+For `standard-4` (4 vCPU, 12 GiB, 20 GB): $0.0000314 per second for memory and disk, plus up to $0.00008 per second
+of CPU. Included per month: 375 vCPU-minutes, 25 GiB-hours, 200 GB-hours of disk. Egress: $0.025 per GB in North
+America and Europe after 1 TB included; more elsewhere. Workers and Durable Object requests are billed separately and
+are fractions of a cent per render. Workers Paid has a $5 monthly minimum.
+
+So a render costs `cpuSeconds x 0.00002 + instanceSeconds x 0.0000314`. `estimatePrice()` computes exactly that.
+
+## What we measured
+
+Everything below: Cloudflare `standard-4`, November 2026, Remotion 4.0.530, 1920x1080 at 30 fps, list prices, without
+the included amounts. **Your numbers will differ.** Content decides almost everything.
+
+### This repository's examples (2026-11-27 and 28)
+
+Remotion's own Chrome Headless Shell, JPEG quality 90, x264 `veryfast`, 3 processes x 1 tab. Cold starts and the
+join are inside these numbers.
+
+| Render | Instances x processes | Wall time | vCPU-s | Instance-s | Cost |
+| --- | --- | --- | --- | --- | --- |
+| `Shapes` (text and shapes, sound), 10 s | 1 x 3, started cold | 30.3 s | 33.0 | 30.3 | $0.0016 |
+| `Shapes`, 20 s | 1 x 3 | 31.8 s | 58.3 | 31.8 | $0.0022 |
+| `Shapes`, 30 s, chunks through R2 | 2 x 3 | 31.2 s | 92.5 | 52.7 | $0.0035 |
+| `Shapes`, 60 s | 4 x 3 | 32.4 s | 186.3 | 102.6 | $0.0069 |
+| `WebFont`, 5 s | 1 x 3 | 15.3 s | 18.9 | 15.3 | $0.0009 |
+| `Cube` (three.js on SwiftShader), 20 s | 1 x 2 | 53.0 s | 145.0 | 53.0 | $0.0046 |
+| One still image | 1 | 6.2 s | 3.2 | 6.1 | $0.0003 |
+| HyperFrames example, 8 s, quality `looks` | 1 | 17.2 s | 27.8 | 17.1 | $0.0011 |
+| Mixed example, 8 s, layer already in the image | 2 x 3 | 35.3 s | 58.6 | 47.8 | $0.0027 |
+| Mixed example, 8 s, layer rendered at job time | 2 x 3 | 37.4 s | 115.0 | 65.1 | $0.0043 |
+
+So the light `Shapes` composition costs about $0.007 per output minute and needs about 3 vCPU-seconds per second of
+video. These compositions are small on purpose. Real content costs more: see the next table.
+
+Everything we ran on Cloudflare for this guide, about 30 renders, comes to roughly $0.12 at list price by these
+counters, idle time not included.
+
+### Heavier content (the earlier measurement)
+
+Measured earlier on the same platform with a private prototype of this design and real compositions (see the
+README). Render only: no cold start, no idle time.
+
+| Content | vCPU-s per output second | Instance-s per output second | $ per output minute |
+| --- | --- | --- | --- |
+| Camera footage with captions and text | 6.06 | 1.80 | 0.0107 |
+| Same, 10-minute timeline on 8 instances | 4.06 to 4.86 | 1.36 to 1.57 | 0.0074 to 0.0088 |
+| Motion graphics (4 animated templates) | 11.24 | 3.28 | 0.0197 |
+| HyperFrames layers composited by Remotion, layers cached | 5.29 | 1.61 | 0.0094 |
+| Same, layers rendered cold | 12.55 | 3.92 | 0.0225 |
+| A 3D device model (WebGL) on Mesa llvmpipe | 25.52 | 6.88 | 0.0436 |
+| The same on SwiftShader | 74.86 | 19.79 | 0.1271 |
+
+These are in `MEASURED_PER_OUTPUT_SECOND` in `packages/cloudflare-containers/src/api/estimate-price.ts`.
+
+Method: CPU seconds are the whole virtual machine's busy time read from `/proc/stat` (user, nice, system, irq,
+softirq, steal) between the start and the end of the work. The machine runs nothing else, so this should be what
+Cloudflare bills as active CPU. **We did not compare it with the bill.** Instance seconds are wall time.
+
+### What is not in any of these numbers
+
+- Idle time before an instance stops: $0.0000314 per second. 90 seconds idle costs as much as rendering 15 seconds of
+  footage.
+- A slow cold start (up to 116 s seen): memory and disk are billed while the image is pulled.
+- Hosts differ. The same chunk took 93 to 191 s on eight instances of one run.
+- Egress of the finished file, R2 storage, the Remotion licence (see the README).
+
+Short renders therefore cost more per minute than long ones.
+
+## Measure your own
+
+1. Deploy your composition (any example folder).
+2. Render something representative, at least 30 seconds, twice. The second run is warm.
+3. Read `costs` from the result:
+
+   ```bash
+   node packages/cloudflare-containers/bin/remotion-cloudflare.mjs render MyComp --concurrency=2 --out=out/test.mp4
+   # "costs": { "accruedSoFar": 0.006949, "cpuSeconds": 186.3, "instanceSeconds": 102.6, ... }
+   ```
+
+   `cpuSeconds` comes from inside the instances. `instanceSeconds` is each instance's lifetime as the coordinator saw
+   it, from its first request to the moment it was stopped.
+4. Divide by the seconds of video. Multiply by your monthly minutes.
+5. Check against the real bill after a few days (dashboard, Billing, or Containers metrics). Tell us if the two
+   disagree.
+
+Things that move the number, in order of effect in our measurements:
+
+1. The GL backend for WebGL content: up to 2.8x. See [gl-backends.md](gl-backends.md).
+2. `swangle` on content that has no WebGL: 1.7 to 5.5x more than Remotion's default.
+3. Whether pre-rendered layers are cached: 2.4x. See [mixed.md](mixed.md).
+4. Filling the instance: 3 processes instead of 1 is about 10 % cheaper and 1.7x faster.
+5. `x264Preset`. Remotion's default is `medium`; the numbers above used `veryfast`.
+6. CSS that is slow without a GPU: large blurs, shadows, gradients, filters (https://www.remotion.dev/docs/performance).

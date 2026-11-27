@@ -1,0 +1,57 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HYPERFRAMES_TELEMETRY: '0'
+      DO_NOT_TRACK: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: System packages (Chrome libraries, FFmpeg, fonts)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libnss3 libdbus-1-3 libatk1.0-0 libgbm-dev libasound2t64 \
+            libxrandr2 libxkbcommon-dev libxfixes3 libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 libcairo2 libcups2 \
+            fonts-liberation
+      - name: Install
+        run: |
+          npm ci
+          npm --prefix examples/remotion-only ci
+          npm --prefix examples/hyperframes-only ci
+          npm --prefix examples/mixed ci
+      - name: Type check
+        run: |
+          npm run typecheck
+          npx tsc --noEmit -p packages/core/worker/tsconfig.json
+          npm --prefix examples/remotion-only run typecheck
+          npm --prefix examples/mixed run typecheck
+      - name: Unit tests (coordinator against a simulated fleet)
+        run: npm test
+      # Tiny renders: a few frames at a quarter of the size. They prove the whole path runs, not that it is fast.
+      - name: Remotion example, chunked on two local instances
+        working-directory: examples/remotion-only
+        run: |
+          npm run site
+          node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Shapes --local --frames=0-89 --scale=0.25 --concurrency=2 --processes-per-instance=1 --frames-per-chunk=30 --out=out/ci.mp4
+          node ../../packages/core/scripts/verify.mjs out/ci.mp4 --frames 90 --joins 30,60 --tone
+      - name: HyperFrames example
+        working-directory: examples/hyperframes-only
+        run: |
+          npm run local
+          node ../../packages/core/scripts/verify.mjs out/local.mp4 --frames 240
+      - name: Mixed example
+        working-directory: examples/mixed
+        run: |
+          npm run site
+          node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Mixed --local --engine=engine.ts --frames=30-89 --scale=0.25 --processes-per-instance=2 --out=out/ci.mp4
+          node ../../packages/core/scripts/verify.mjs out/ci.mp4 --frames 60

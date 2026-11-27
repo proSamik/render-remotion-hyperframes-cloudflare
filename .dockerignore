@@ -1,0 +1,8 @@
+# The build context of every image is the repository root. Keep it small.
+**/node_modules
+**/out
+**/.render-work
+**/.hyperframes
+.git
+docs
+*.md

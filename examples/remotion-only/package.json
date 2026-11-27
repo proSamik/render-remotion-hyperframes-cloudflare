@@ -1,0 +1,37 @@
+{
+  "name": "example-remotion-only",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure Remotion: server-side rendering of a composition, single or chunked, locally and on Cloudflare Containers.",
+  "scripts": {
+    "assets": "node ../../packages/core/scripts/make-tone.mjs public/tone.wav 10",
+    "site": "npm run assets && node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs sites create src/index.ts --site-name=site",
+    "studio": "npm run assets && remotion studio src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "local": "npm run site && node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Shapes --local --out=out/local.mp4",
+    "local:chunked": "node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Shapes --local --concurrency=2 --processes-per-instance=2 --out=out/local-chunked.mp4",
+    "docker:build": "npm run site && docker build --platform linux/amd64 -f Dockerfile -t rrh-remotion-only ../..",
+    "docker": "node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Shapes --docker=rrh-remotion-only --concurrency=2 --processes-per-instance=2 --out=out/docker.mp4",
+    "deploy": "npm run site && node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs services deploy",
+    "cloud": "node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Shapes --concurrency=2 --out=out/cloud.mp4"
+  },
+  "dependencies": {
+    "@react-three/fiber": "9.4.2",
+    "@remotion/fonts": "4.0.530",
+    "@remotion/media": "4.0.530",
+    "@remotion/renderer": "4.0.530",
+    "@remotion/three": "4.0.530",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "remotion": "4.0.530",
+    "three": "0.181.2"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "4.0.530",
+    "@remotion/cli": "4.0.530",
+    "@types/react": "19.2.7",
+    "@types/three": "0.181.0",
+    "typescript": "5.9.3"
+  }
+}

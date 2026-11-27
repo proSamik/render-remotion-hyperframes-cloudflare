@@ -1,0 +1,7 @@
+out/
+build/
+node_modules/
+.render-work/
+public/tone.wav
+public/hf/
+hyperframes-layer/.hyperframes/

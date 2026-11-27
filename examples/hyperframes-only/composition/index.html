@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en" data-composition-variables='[{"id":"headline","type":"string","label":"Headline","default":"HyperFrames on Cloudflare"}]'>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <!-- GSAP comes from the CDN, as in `hyperframes init`. The render therefore needs outbound Internet. -->
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <style>
+      /* A font the design needs travels with the project. The container has no Mac or Windows fonts. */
+      @font-face {
+        font-family: "Archivo Black";
+        src: url("assets/fonts/ArchivoBlack-Regular.ttf") format("truetype");
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #0b1020; }
+      #root { position: relative; width: 1920px; height: 1080px; font-family: "Archivo Black", sans-serif; color: #f8fafc; }
+      #headline { position: absolute; left: 140px; top: 150px; width: 1640px; font-size: 104px; line-height: 1.05; }
+      #sub { position: absolute; left: 146px; top: 300px; font-size: 40px; color: #94a3b8; font-family: sans-serif; }
+      #chart { position: absolute; left: 140px; top: 440px; width: 1640px; height: 460px; }
+      .bar { position: absolute; bottom: 0; width: 300px; height: 460px; border-radius: 18px 18px 0 0; transform-origin: 50% 100%; }
+      #bar-a { left: 0; background: #f97316; }
+      #bar-b { left: 440px; background: #22d3ee; }
+      #bar-c { left: 880px; background: #a3e635; }
+      #bar-d { left: 1320px; background: #f472b6; }
+      #clock { position: absolute; left: 146px; bottom: 60px; font-family: sans-serif; font-size: 36px; color: #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="8" data-width="1920" data-height="1080">
+      <h1 id="headline" class="clip" data-start="0" data-duration="8" data-track-index="0" data-var-text="headline">HyperFrames on Cloudflare</h1>
+      <p id="sub" class="clip" data-start="0.6" data-duration="7.4" data-track-index="1">HTML, CSS and GSAP, seeked frame by frame in a container</p>
+      <div id="chart" class="clip" data-start="1" data-duration="7" data-track-index="2">
+        <div id="bar-a" class="bar"></div>
+        <div id="bar-b" class="bar"></div>
+        <div id="bar-c" class="bar"></div>
+        <div id="bar-d" class="bar"></div>
+      </div>
+      <p id="clock" class="clip" data-start="0" data-duration="8" data-track-index="3"><span id="clock-text">0.00 s</span></p>
+      <audio id="tone" class="clip" data-start="0" data-duration="8" data-track-index="4" data-volume="1" src="assets/tone.wav"></audio>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#headline", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 0);
+      tl.fromTo("#sub", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.out" }, 0.6);
+      [["#bar-a", 0.45], ["#bar-b", 0.8], ["#bar-c", 0.6], ["#bar-d", 1]].forEach(([bar, height], index) => {
+        tl.fromTo(bar, { scaleY: 0 }, { scaleY: height, duration: 1.2, ease: "power4.out" }, 1.1 + index * 0.25);
+        tl.to(bar, { scaleY: height * 0.7, duration: 1.5, ease: "sine.inOut" }, 4 + index * 0.2);
+      });
+      // Everything visible is a function of timeline time: the clock reads the timeline, never Date.now().
+      const clock = { t: 0 };
+      tl.to(clock, { t: 8, duration: 8, ease: "none", onUpdate: () => { document.getElementById("clock-text").textContent = clock.t.toFixed(2) + " s"; } }, 0);
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

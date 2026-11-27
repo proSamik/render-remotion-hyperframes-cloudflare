@@ -1,0 +1,20 @@
+{
+  "name": "example-hyperframes-only",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure HyperFrames: an HTML composition rendered by HyperFrames' own renderer, locally and on Cloudflare Containers.",
+  "dependencies": {
+    "hyperframes": "0.9.103"
+  },
+  "scripts": {
+    "assets": "node ../../packages/core/scripts/make-tone.mjs composition/assets/tone.wav 8",
+    "check": "cd composition && hyperframes check",
+    "preview": "cd composition && hyperframes preview",
+    "local": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/render.mjs local --engine=../../packages/hyperframes-engine/engine.ts --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/local.mp4",
+    "docker:build": "npm run assets && docker build --platform linux/amd64 -f Dockerfile -t rrh-hyperframes-only ../..",
+    "docker": "node ../../packages/core/bin/render.mjs local --docker=rrh-hyperframes-only --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/docker.mp4",
+    "deploy": "npm run assets && wrangler deploy",
+    "cloud": "node ../../packages/core/bin/render.mjs cloud --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/cloud.mp4"
+  }
+}

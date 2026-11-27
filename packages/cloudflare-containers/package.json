@@ -1,0 +1,28 @@
+{
+  "name": "remotion-cloudflare-containers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unofficial. Render Remotion videos on Cloudflare Containers, with an API shaped like @remotion/lambda. Not published to npm, not affiliated with Remotion.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./engine": "./container/engine.ts"
+  },
+  "bin": {
+    "remotion-cloudflare": "./bin/remotion-cloudflare.mjs"
+  },
+  "peerDependencies": {
+    "@remotion/bundler": "4.0.530",
+    "@remotion/renderer": "4.0.530"
+  },
+  "peerDependenciesMeta": {
+    "@remotion/bundler": {
+      "optional": true
+    }
+  }
+}

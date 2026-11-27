@@ -1,0 +1,33 @@
+{
+  "name": "example-mixed",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A Remotion composition with a HyperFrames-made layer: the layer is pre-rendered to a video with alpha, then composited by Remotion.",
+  "scripts": {
+    "assets": "node ../../packages/core/scripts/make-tone.mjs public/tone.wav 8",
+    "layer": "node ../../packages/core/bin/with-typescript-run.mjs prerender-layer.ts public",
+    "site": "npm run assets && npm run layer && node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs sites create src/index.ts --site-name=site",
+    "studio": "npm run assets && npm run layer && remotion studio src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "local": "npm run site && node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Mixed --local --engine=engine.ts --out=out/local.mp4",
+    "docker:build": "npm run site && docker build --platform linux/amd64 -f Dockerfile -t rrh-mixed ../..",
+    "docker": "node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Mixed --docker=rrh-mixed --concurrency=2 --processes-per-instance=2 --out=out/docker.mp4",
+    "deploy": "npm run site && node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs services deploy",
+    "cloud": "node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Mixed --concurrency=2 --out=out/cloud.mp4"
+  },
+  "dependencies": {
+    "@remotion/media": "4.0.530",
+    "@remotion/renderer": "4.0.530",
+    "hyperframes": "0.9.103",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "remotion": "4.0.530"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "4.0.530",
+    "@remotion/cli": "4.0.530",
+    "@types/react": "19.2.7",
+    "typescript": "5.9.3"
+  }
+}

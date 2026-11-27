@@ -1,0 +1,28 @@
+{
+  "name": "render-remotion-hyperframes-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A working guide to rendering Remotion and HyperFrames video code on Cloudflare Containers.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "setup": "npm install && npm --prefix examples/remotion-only install && npm --prefix examples/hyperframes-only install && npm --prefix examples/mixed install",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test packages/core/test/*.test.ts packages/cloudflare-containers/test/*.test.ts",
+    "local:remotion": "npm --prefix examples/remotion-only run local",
+    "local:hyperframes": "npm --prefix examples/hyperframes-only run local",
+    "local:mixed": "npm --prefix examples/mixed run local"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261127.1",
+    "@remotion/renderer": "4.0.530",
+    "@types/node": "22.20.7",
+    "aws4fetch": "1.0.20",
+    "typescript": "5.9.3",
+    "wrangler": "4.169.0",
+    "tsx": "4.23.15"
+  }
+}

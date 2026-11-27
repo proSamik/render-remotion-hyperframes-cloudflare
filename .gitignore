@@ -1,0 +1,12 @@
+node_modules/
+out/
+build/
+.render-work/
+.wrangler/
+.hyperframes/
+.dev.vars
+.env
+.env.*
+*.log
+.DS_Store
+wrangler.test.jsonc

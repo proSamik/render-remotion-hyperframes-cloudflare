@@ -1,0 +1,40 @@
+{
+  // The render service for this example: Worker + coordinator + container image. Deploy with `npm run deploy`.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "rrh-hyperframes-only",
+  "main": "../../packages/core/worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "RenderContainer",
+      // The Durable Object picks image and instance type when it starts a container (the current Containers API).
+      "scheduling_policy": "durable_object",
+      "images": { "render": { "dockerfile": "./Dockerfile", "build_context": "../.." } }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "RENDER_CONTAINER", "class_name": "RenderContainer" },
+      { "name": "RENDER_JOB", "class_name": "RenderJob" }
+    ]
+  },
+  "exports": {
+    "RenderContainer": { "type": "durable-object", "storage": "sqlite" },
+    "RenderJob": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "vars": {
+    "SERVICE_NAME": "rrh-hyperframes-only",
+    "INSTANCE_TYPE": "standard-4",
+    // The most container instances one render may use. This is your spend limit per render.
+    "MAX_INSTANCES_PER_RENDER": "4",
+    // An instance nobody talks to stops after this long. It bills memory and disk until then.
+    "INACTIVITY_TIMEOUT_SECONDS": "180",
+    // "false" cuts the containers off from the Internet (web fonts and remote media stop working).
+    "ENABLE_INTERNET": "true"
+  }
+  // Optional R2 bucket for chunks and outputs (docs/r2.md). Without it files travel between instances.
+  // "r2_buckets": [{ "binding": "RENDER_BUCKET", "bucket_name": "rrh-renders" }]
+}
