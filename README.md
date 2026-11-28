@@ -519,7 +519,9 @@ Honest list. Read it before you depend on this.
 - **No queue, no rate limit, no webhooks, no pool of warm instances.**
 - **One cost class.** Every chunk runs with the same number of processes per instance. Content that fills an
   instance alone (a heavy shader) should not share one; the service does not know which chunks those are.
-- **Only H.264 is chunked.** For HyperFrames that means MP4; WebM, MOV and the other formats render in one piece.
+- **Only H.264 is chunked.** For HyperFrames that means MP4; WebM, MOV, GIF and the other formats render in one
+  piece. Chunked ProRes MOV, WebM VP9 and GIF are planned work, with what each needs written down in
+  [docs/chunking.md](docs/chunking.md#planned-prores-mov-webm-vp9-and-gif-in-chunks-not-built).
 - **Split HyperFrames rendering ran on Cloudflare once** (one example, 4 instances). With R2 the plan is made once
   and shared; when all instances start together that saves CPU, not time. The composition must be deterministic:
   time from the timeline, seeded randomness, fonts and scripts in the project; a pre-flight renders in one piece when

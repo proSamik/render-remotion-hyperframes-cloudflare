@@ -40,6 +40,22 @@ streaming join that gives the same file: [long-videos.md](long-videos.md).
 Only H.264 is chunked here. Any other codec (`vp9`, `prores`, `gif`, audio only) is rendered in one piece on one
 instance. That is a limit of this repository, not of Remotion.
 
+### Planned: ProRes MOV, WebM VP9 and GIF in chunks (not built)
+
+What each needs, so nobody has to rediscover it. None of it has been written or run here.
+
+| Output | Chunk format | Join | What to watch |
+| --- | --- | --- | --- |
+| ProRes MOV | each chunk a ProRes `.mov` (every ProRes frame is a keyframe) | FFmpeg concat demuxer, `-c copy` into one `.mov`; audio as for H.264 (AAC per chunk with the same `compositionStart`, or one PCM track rendered once) | chunk files are large (ProRes 422 HQ is about 220 Mbit/s at 1080p30): a 60 s chunk is about 1.6 GB, so join from R2 with the streaming feed, and keep chunks under the 100 MiB request limit only if they go through the gateway in parts |
+| WebM VP9 | each chunk a `.webm` that starts with a keyframe (`-g` no longer than the chunk, forced keyframe on its first frame), Opus audio | concat demuxer with `-c copy`; Opus has 312-sample priming per chunk, so render the sound once for the whole video (as the HyperFrames join does) instead of joining per-chunk audio | VP9 encodes 5 to 10 times slower than x264 `veryfast`: chunking pays off more, and the chunk deadline must grow with it. Alpha (`yuva420p`) must be the same in every chunk |
+| GIF | each chunk a PNG sequence or a lossless intermediate (FFV1 in MKV), never a GIF | one `palettegen` over the whole video, then `paletteuse` while joining: a palette per chunk would change colours at every join | the join re-encodes, so it costs CPU on one instance; GIFs are short, so splitting rarely pays at all |
+
+Remotion's own distributed renderer (Lambda) renders these codecs in chunks and joins them with `combineChunks()`;
+using its codec-specific join paths per codec is the likely way in, then a `compare` run like the HyperFrames one
+(one chunk against several, SSIM at the joins, sound at the joins) before calling any of them done. For HyperFrames,
+`@hyperframes/producer/distributed` plans H.264 MP4 only; other formats would need the same three joins on top of its
+frame capture.
+
 ### What we verified
 
 The example sound track is a steady tone with a beep at every second (`packages/core/scripts/make-tone.mjs`).

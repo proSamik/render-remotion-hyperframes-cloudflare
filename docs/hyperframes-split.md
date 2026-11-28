@@ -377,7 +377,8 @@ process per instance. Durations m:ss, from the request to `done` (download not i
   Set `fleet.chunkDeadlineSeconds` for heavy content, or use `--chunks auto` so heavy chunks are shorter. Planning
   is also counted against the no-progress rule (150 s at least): a project whose plan takes longer than that (long
   videos to extract) needs a longer deadline too.
-- **MP4 (H.264) only.** WebM, MOV, GIF, HLS and PNG sequences render in one piece with the CLI.
+- **MP4 (H.264) only.** WebM, MOV, GIF, HLS and PNG sequences render in one piece with the CLI. What chunking the
+  others would need: [chunking.md](chunking.md#planned-prores-mov-webm-vp9-and-gif-in-chunks-not-built).
 - **Whole-number frame rates only.**
 - **`data-duration` must match the timeline.** The coordinator plans from the HTML without a browser.
 - **Heavy ranges come from attributes in the root `index.html`**, not from measuring.

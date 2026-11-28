@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Chunking other formats, written down as planned work (2026-11-28, docs only): what ProRes MOV, WebM VP9 and GIF in
+chunks would each need (chunk format, join, audio, what to watch), in docs/chunking.md. Not built: only H.264 is
+chunked.
+
 Diagrams (2026-11-28): architecture, a render phase by phase, Remotion chunking, the HyperFrames split, failure
 handling, and where the money goes beside AWS, as Excalidraw files (`docs/diagrams/*.excalidraw`, open them at
 excalidraw.com or in the VS Code extension to edit) with SVG exports (white background) in the README and the docs.
