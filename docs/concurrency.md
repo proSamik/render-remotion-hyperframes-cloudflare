@@ -62,15 +62,20 @@ What they do share is your account's capacity. The default account limit is 15,0
 `standard-4` instances). With the `durable_object` scheduling policy there is no `max_instances` setting in
 `wrangler.jsonc`: the only caps are your own `MAX_INSTANCES_PER_RENDER` and how many renders you start.
 **This service does not queue renders and does not limit how many run at once.** Put your own limit in front of it
-if anyone but you can start a render. An earlier prototype of ours used a fair queue over a fixed pool of instance
-slots (round robin, no job above 75 % of the pool); it is not part of this repository.
+if anyone but you can start a render. The prototype of this design used a fair queue over a fixed pool of instance
+slots (round robin, no job above 75 % of the pool, slots given back while others wait). It is not part of this
+repository; the rules and what was measured are in [planning.md](planning.md#many-jobs-on-one-pool-fair-sharing).
 
-When Cloudflare cannot start an instance, the request to it fails, the chunk stays queued and is tried again on the
-next round. A render waits; it does not fail for lack of instances until 15 minutes have passed without any instance.
+When Cloudflare cannot start an instance, the request to it answers `503` ("There is no Container instance available
+at this time"). That means "not ready yet". The chunk stays queued and is offered again on the next round; nothing
+is counted against it, and no spare instance is started. A render waits; it does not fail for lack of instances
+until 15 minutes have passed without any instance.
 
 ## Picking numbers
 
 - Short clip (under 30 s): 1 instance. More instances mostly add cold starts.
 - 1 to 5 minutes: 2 to 4 instances.
 - Longer: as many as you allow yourself. Past about 10 s per chunk there is no reason to make chunks smaller.
+- To let the video decide instead of you: [planning.md](planning.md) (`planFleet()`), and
+  [long-videos.md](long-videos.md) when chunks plus output would not fit one disk.
 - HyperFrames: 1 instance per video. See [chunking.md](chunking.md).

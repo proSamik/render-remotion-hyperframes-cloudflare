@@ -69,8 +69,9 @@ polling a progress document.
    `NoReactInternals.serializeJSONWithSpecialTypes` for input props, wrap public functions in
    `wrapWithErrorHandling`, and pass `licenseKey` and telemetry through. We call the public `renderMedia()` and send
    plain JSON.
-7. **Tests.** Upstream uses `bun test`, with unit and integration folders per package. We have 15 unit tests with
-   `node:test` (coordinator against a simulated fleet, option mapping, pricing) and manual end-to-end runs. No test
+7. **Tests.** Upstream uses `bun test`, with unit and integration folders per package. We have 39 unit tests with
+   `node:test` (coordinator against a simulated fleet, transfers and uploads against a store in memory, the streaming
+   join, option mapping, pricing), end-to-end renders in CI, and manual runs on Cloudflare. No test
    deploys to Cloudflare, and upstream would need a way to run that in CI or accept that it cannot.
 8. **Licence.** There is no CLA. The contributing page says: "By sending pull requests, you agree that we can use
    your code changes in a commercial context." Code offered upstream would leave MIT and fall under Remotion's
@@ -88,6 +89,8 @@ polling a progress document.
 - Does a chunked self-hosted render report one render or many to the licence telemetry?
 - Why is the site baked into the image rather than served from R2, like S3 on Lambda?
 - What happens above 100 MiB per chunk, above 20 GB per render, and with 100 instances?
+- The streaming join repeats arithmetic of `combineChunks()` (the AAC in and out points) outside Remotion. It has to
+  be checked again with every Remotion version; upstream it would simply be an option of `combineChunks()`.
 
 ## Not at parity with Lambda or Cloud Run
 
@@ -95,7 +98,7 @@ polling a progress document.
 - No webhooks, no `privacy`, no `outName`, no `downloadBehavior`, no `deleteAfter`, no `forceWidth` and similar
   overrides, no `metadata`, no `licenseKey`, no custom `audioCodec`.
 - Input props: plain JSON, no special types, no bucket fallback for large payloads.
-- `getRenderProgress()` returns a subset; error entries have no `type`, `stack`, `attempt` or `willRetry`.
+- `getRenderProgress()` returns a subset; error entries have a `kind` and an `attempt` but no `stack` or `willRetry`.
 - No `getServices()`, `getSites()`, `deleteSite()`, `deleteService()`, `getCompositions...()`, `getRegions()`.
 - No version check between client and service (the site and renderer cannot mismatch, but the client and the Worker
   can).
@@ -110,7 +113,9 @@ polling a progress document.
 
 - Distributed rendering with seamless audio joins, verified.
 - Authentication, progress by frames, propagated errors.
-- Per-chunk deadlines, retries on a fresh instance, duplicate stragglers, checksummed transfers.
+- Per-chunk deadlines, retries on a fresh instance, a second run for measurably slow chunks, one set of files per
+  run, checksums on every transfer.
+- A join that does not need chunks and output on one disk, with the same result as `combineChunks()`.
 - Cost reported per render from measured CPU time.
 - Runs locally and in Docker with the same coordinator.
 - Written for Cloudflare's current Containers API.

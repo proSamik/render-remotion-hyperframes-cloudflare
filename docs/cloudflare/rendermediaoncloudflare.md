@@ -93,8 +93,20 @@ Default: `max(300, frames / 1.5)`.
 
 ### `duplicateStragglers?`
 
-Start a second copy of a chunk that runs more than twice as long as the median when a slot is free.
-Default `true`.
+Hedging. Start a second run of a chunk that is measurably slow (under half the median frame rate of the finished
+chunks, or no first frame after three times the usual time) when nothing is queued and another instance has a free
+slot. Once per chunk. The first result wins. Default `true`. See [Failures and retries](../failures.md).
+
+### `maxHedgeShare?`
+
+At most this share of the chunks gets a second run, rounded up. Default `0.05`.
+
+### `stitch?`
+
+How the chunks are joined. `'combine'` (default): `combineChunks()` with every chunk on the disk of one instance.
+`'stream'`: chunks are fed through a pipe in order and deleted behind it; the same MP4. `'stream-fmp4'`: a fragmented
+MP4 that is uploaded while it is written, for outputs that do not fit the disk. See
+[Long videos](../long-videos.md). No Lambda counterpart.
 
 ### `frameRange?`
 

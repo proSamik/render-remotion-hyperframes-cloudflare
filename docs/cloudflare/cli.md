@@ -71,6 +71,20 @@ Instances. Default 1. Alias: `--instances`.
 
 As in [renderMediaOnCloudflare()](rendermediaoncloudflare.md).
 
+### `--stitch`
+
+`combine` (default), `stream` or `stream-fmp4`. See [Long videos](../long-videos.md).
+
+### `--no-hedge`, `--max-hedge-share`
+
+`--no-hedge` is `duplicateStragglers: false`. `--max-hedge-share=0.05` is the share of chunks that may get a second
+run.
+
+### `--work-dir`, `--keep-work`
+
+Local renders only. Where the instances keep their files (default `.render-work`), and whether the folder stays
+after the render. With `--keep-work` the chunk files are there to look at.
+
 ### `--frames`
 
 `0-299`.

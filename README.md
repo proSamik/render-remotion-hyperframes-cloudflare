@@ -27,12 +27,21 @@ Written and tested in November 2026 with Remotion 4.0.530, HyperFrames 0.9.103, 
 | Remotion: still, web font, WebGL | tested | WebGL tested | tested |
 | HyperFrames | tested | tested | tested |
 | Mixed | tested | tested | tested |
-| Chunks and output through R2 | | | tested |
-| Presigned download URLs | | | **not run**: written from the docs |
+| Chunks and output through R2 (Worker gateway) | | | tested |
+| Streaming join (`--stitch=stream`, `stream-fmp4`) | tested: same file as `combineChunks()` | | **not run** |
+| Chunks and output over presigned URLs (`R2_DIRECT`) | tested against an S3 stand-in in memory | | **not run** here; verified for real in the prototype ([docs/r2.md](docs/r2.md)) |
+| Presigned download URLs | | | **not run** here: written from the docs; same presigner |
 | `wrangler deploy` building the image with local Docker | | | **not run**: we pushed prebuilt images ([why](docs/daemonless-deploy.md)) |
 
 "Tested" means: rendered, frame count and duration checked, sound checked at every join, frames looked at.
 Details and everything that is not tested: [Limits and known problems](#limits-and-known-problems).
+
+**The Cloudflare column was measured with version 0.1.0.** The version after it changed the coordinator, the task
+server and the Worker (hedging rule, one set of files per run, checked transfers, streaming join: see the
+[changelog](CHANGELOG.md)). Those changes ran locally on macOS, with every example and 39 unit tests; CI
+runs the same checks on Linux. They have not been deployed to Cloudflare from this code base yet. The lessons behind them come from a private
+prototype of the same design that did run there, on up to 292 instances; where a number on these pages is the
+prototype's, the page says so.
 
 ## Which example do I need?
 
@@ -110,10 +119,11 @@ flowchart TD
 3. It starts container instances. Each instance runs a small task server and renders up to 3 chunks at once, each
    in its own process.
 4. Every 1.5 seconds it polls the instances: frames done, tasks lost, deadlines passed. It re-queues what failed.
-5. Finished chunks go to one instance (directly with a checksum, or through R2), which joins them.
+   Every run of a chunk writes its own files, so a retry or a second run can never overwrite a result.
+5. Finished chunks go to one instance (directly, or through R2; with a checksum on every hop), which joins them.
 6. You poll progress, download the file, and delete the render.
 
-The coordinator is a plain state machine (`packages/core/src/coordinator.ts`, about 350 lines). The same code runs
+The coordinator is a plain state machine (`packages/core/src/coordinator.ts`, under 500 lines). The same code runs
 in the Durable Object and in a local loop, which is how `npm run local` and `npm run docker` work, and how its unit
 tests simulate failures.
 
@@ -121,7 +131,8 @@ tests simulate failures.
 
 ```
 packages/
-  core/                     engine-neutral: coordinator, task server (runs in the container), Worker, client, local runner
+  core/                     engine-neutral: coordinator, task server (runs in the container), Worker, client, local runner,
+                            checked transfers, presigner and signing policy, multipart upload, range proxy, planner
   cloudflare-containers/    remotion-cloudflare-containers: the Remotion engine, an API shaped like @remotion/lambda, a CLI
   hyperframes-engine/       the HyperFrames engine
 examples/
@@ -268,8 +279,8 @@ HyperFrames, FFmpeg, GSAP or Chromium. The font Archivo Black in the examples is
 - `MAX_INSTANCES_PER_RENDER` caps one render. Nothing caps the number of renders.
 - Do not run other people's code: the browser runs without its sandbox, and the only isolation is the instance
   (one micro virtual machine per instance, never shared between renders).
-- No secrets in the image. The containers get no Cloudflare credentials; with R2 they reach only their own render's
-  objects, through the Worker.
+- No secrets in the image. The containers get no Cloudflare credentials and no storage keys; with R2 they reach only
+  their own render's objects, through the Worker or over presigned URLs that the coordinator signs per object.
 
 More: [docs/security.md](docs/security.md).
 
@@ -281,10 +292,13 @@ More: [docs/security.md](docs/security.md).
 | GL backends | [docs/gl-backends.md](docs/gl-backends.md) |
 | Fonts | [docs/fonts.md](docs/fonts.md) |
 | Cold starts and warm instances | [docs/cold-starts.md](docs/cold-starts.md) |
-| Failures and retries | [docs/failures.md](docs/failures.md) |
+| Failures, retries, hedging, checksums, errors as events | [docs/failures.md](docs/failures.md) |
+| Long videos: the streaming join, MP4 and fragmented MP4, disk limits | [docs/long-videos.md](docs/long-videos.md) |
+| Large inputs: resumable multipart uploads, reading media by range | [docs/inputs.md](docs/inputs.md) |
+| Planning a fleet: tiers, cost classes, warm instances, fair sharing | [docs/planning.md](docs/planning.md) |
 | Concurrency and many jobs at once | [docs/concurrency.md](docs/concurrency.md) |
 | Progress reporting | [docs/progress.md](docs/progress.md) |
-| R2 and presigned URLs | [docs/r2.md](docs/r2.md) |
+| R2, presigned URLs and what to sign | [docs/r2.md](docs/r2.md) |
 | Costs and how to measure your own | [docs/costs.md](docs/costs.md) |
 | Mixing the two frameworks | [docs/mixed.md](docs/mixed.md) |
 | Using this from an AI coding agent | [docs/agents.md](docs/agents.md), [AGENTS.md](AGENTS.md) |
@@ -304,6 +318,8 @@ More: [docs/security.md](docs/security.md).
 | HyperFrames: `Chrome not found` on Cloudflare only | set `HYPERFRAMES_BROWSER_PATH`; the example Dockerfiles do |
 | Stuck in `planning` right after the first deploy | the image is still being distributed; wait a few minutes |
 | `410` on download | the instance with the output stopped; download sooner or attach R2 |
+| `503` with `"selftest": "failed"` | the browser in the image cannot do what `RENDER_SELFTEST` checks: [GL backends](docs/gl-backends.md) |
+| Progress waits at one percentage | chunks are rendered again after a restart; the number never goes back: [progress](docs/progress.md) |
 | `Unknown file extension ".ts"` | a Node build without TypeScript support; run `npm install` in the root |
 
 More: [docs/troubleshooting.md](docs/troubleshooting.md).
@@ -313,20 +329,31 @@ More: [docs/troubleshooting.md](docs/troubleshooting.md).
 Honest list. Read it before you depend on this.
 
 - **Young code.** Written in November 2026 and run a few dozen times on one account, with at most 4 instances in
-  this code base. The larger numbers (8 instances, 10 minutes, 93 jobs) come from an earlier private prototype with
-  the same design.
+  this code base. The larger numbers (8 to 292 instances, 10 minutes to one hour of video, 93 jobs and more) come
+  from a private prototype with the same design and its own code.
+- **The newest changes have not been on Cloudflare.** The measured hedging, the per-run file names, the checked
+  downloads, the streaming join, direct transfer over presigned URLs and the self-test hook ran on one Mac, against
+  stand-ins, and are checked by CI. The examples on Cloudflare ran with the version before.
 - **Cloudflare's API is moving.** This uses the Durable Object Container API with the `durable_object` scheduling
   policy, which Cloudflare calls a public beta. The `Container` class from `@cloudflare/containers`, which most
   existing examples use, is called deprecated in Cloudflare's docs as of November 2026.
-- **Not run:** presigned URLs; `wrangler deploy` building the image on the same machine; outputs above 100 MiB
-  (the multipart upload ran only with its threshold lowered to 8 MiB); more than 4 instances; videos longer than 90
-  seconds; HyperFrames as the host of a mix; Google Fonts loaded by Remotion at render time; `https://` serve URLs.
+- **Not run:** presigned URLs against R2; `wrangler deploy` building the image on the same machine; outputs above
+  100 MiB (the multipart upload ran only with its threshold lowered to 8 MiB); more than 4 instances; videos longer
+  than 90 seconds; the streaming join on anything longer than 90 frames; HyperFrames as the host of a mix; Google
+  Fonts loaded by Remotion at render time; `https://` serve URLs.
+- **Helpers that nothing here uses yet.** The multi-user signing policy, the client-side multipart upload, the range
+  proxy and the planner in `packages/core` are unit-tested and documented as patterns
+  ([inputs](docs/inputs.md), [planning](docs/planning.md)). No example calls them.
 - **The failure handling was not triggered by a real failure in this code base.** Slow starts, hanging chunks,
   restarts and damaged transfers happened in the earlier prototype. Here they are reproduced by unit tests against a
   simulated fleet.
-- **No queue, no rate limit, no webhooks.**
+- **No queue, no rate limit, no webhooks, no pool of warm instances.**
+- **One cost class.** Every chunk runs with the same number of processes per instance. Content that fills an
+  instance alone (a heavy shader) should not share one; the service does not know which chunks those are.
 - **Only H.264 is chunked.** HyperFrames is not chunked at all.
 - **Without R2 the output lives on one instance** for at most 15 minutes after the render.
+- **The default join needs chunks and output on one disk.** About 85 minutes of 1080p by the prototype's measurement.
+  Longer needs `--stitch=stream` or `stream-fmp4`, which have not run on Cloudflare here.
 - **A constant audio offset of about 45 ms** in Remotion renders of the example, chunked or not. It does not grow.
   We did not find its cause.
 - **Hosts differ.** The same chunk took 93 to 191 s on eight instances of one earlier run.

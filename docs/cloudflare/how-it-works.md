@@ -15,7 +15,7 @@ crumb: 'Cloudflare Containers'
    process with its own browser. A chunk is one `renderMedia()` call with `codec: 'h264-ts'`, `frameRange`,
    `compositionStart`, `separateAudioTo` and `forSeamlessAacConcatenation`.
 6. The job polls the instances every 1.5 seconds from a Durable Object alarm. It collects frame counts, re-queues
-   chunks that were lost, replaces instances that hang, and starts a second copy of a straggler.
+   chunks that were lost, replaces instances that hang, and starts a second run of a chunk that is measurably slow.
 7. Finished chunks are brought to one instance (directly, or through R2).
 8. That instance calls `combineChunks()`.
 9. `getRenderProgress()` reads the job's state. `downloadMedia()` streams the result.

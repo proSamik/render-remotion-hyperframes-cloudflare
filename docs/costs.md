@@ -67,6 +67,11 @@ Method: CPU seconds are the whole virtual machine's busy time read from `/proc/s
 softirq, steal) between the start and the end of the work. The machine runs nothing else, so this should be what
 Cloudflare bills as active CPU. **We did not compare it with the bill.** Instance seconds are wall time.
 
+The counter belongs to the instance, not to a task. A task that reads it sees the CPU of everything that ran on the
+instance meanwhile, so two tasks that share an instance each include the other's. The coordinator therefore adds up
+one number per instance (the increases of the instance's own counter), never the tasks' figures. One job's summary in
+the prototype said 86,042 vCPU-seconds before that correction and 58,800 after.
+
 ### What is not in any of these numbers
 
 - Idle time before an instance stops: $0.0000314 per second. 90 seconds idle costs as much as rendering 15 seconds of

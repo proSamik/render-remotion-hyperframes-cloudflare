@@ -15,7 +15,7 @@ Per chunk, `renderMedia()` gets:
 | `codec` | `'h264-ts'` | An MPEG-TS stream can be joined byte for byte. MP4 chunks do not join: in our first test only the first chunk's video came out. |
 | `frameRange` | `[chunkStart, chunkEnd - 1]` | Inclusive, as always in Remotion. |
 | `compositionStart` | first frame of the WHOLE export | The same number for every chunk. Not the chunk's own start. With the chunk start the audio joins were wrong. |
-| `separateAudioTo` | `chunk-0003.aac` | Audio leaves as its own file. |
+| `separateAudioTo` | `chunk-0003-r1.aac` | Audio leaves as its own file. Every run of a chunk has its own file names (`-r1`, `-r2` for a retry or a hedge), so a late run cannot overwrite the one that won. |
 | `forSeamlessAacConcatenation` | `true` | Remotion pads each chunk's audio to whole AAC frames and renders a little extra on both sides. |
 | `audioCodec` | `'aac'` | |
 | `enforceAudioTrack` | `true` | A silent chunk still needs an audio file, or the join shifts. |
@@ -31,6 +31,9 @@ Rules that follow from Remotion's docs:
 Join: `combineChunks()` from `@remotion/renderer` (since v4.0.279). It copies the video streams and trims the audio
 padding. Pass `codec: 'h264'` there, not `'h264-ts'`. It needs `framesPerChunk`, `compositionDurationInFrames`,
 `fps`, and `frameRange` when you did not render the whole composition.
+
+`combineChunks()` needs every chunk and the output on one disk. For videos where that does not fit there is a
+streaming join that gives the same file: [long-videos.md](long-videos.md).
 
 Only H.264 is chunked here. Any other codec (`vp9`, `prores`, `gif`, audio only) is rendered in one piece on one
 instance. That is a limit of this repository, not of Remotion.

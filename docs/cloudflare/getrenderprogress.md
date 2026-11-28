@@ -34,7 +34,8 @@ As in `renderMediaOnCloudflare()`.
 
 ### `overallProgress`
 
-A number from 0 to 1. 90 % of it is frames rendered, 5 % chunks brought together, 5 % the join.
+A number from 0 to 1. 90 % of it is frames rendered, 5 % chunks brought together, 5 % the join. It never
+decreases, also when chunks are rendered again, and it is `1` only when `done` is `true`.
 
 ### `done`
 
@@ -50,6 +51,10 @@ A number from 0 to 1. 90 % of it is frames rendered, 5 % chunks brought together
 
 `{ total, rendered, stored, running }`. On Lambda `chunks` is a number.
 
+### `hedges`
+
+`{ started, won }`: second runs of slow chunks, and how many of them finished first.
+
 ### `instances`
 
 Container instances alive for this render. The counterpart of `lambdasInvoked`.
@@ -60,8 +65,11 @@ Container instances alive for this render. The counterpart of `lambdasInvoked`.
 
 ### `errors`
 
-An array of `{ at, message, fatal, chunk?, instance? }`. Problems that were recovered from are listed with
-`fatal: false`. Lambda's entries carry more fields (`type`, `stack`, `attempt`, `willRetry`, ...).
+An array of `{ at, kind, message, fatal, chunk?, attempt?, instance? }`. `kind` is one of a fixed list
+(`chunk_failed`, `chunk_deadline`, `chunk_hung`, `instance_restarted`, `checksum_mismatch`, `stitch_error`,
+`job_failed`, ...): group and count by it, not by the message. Problems that were recovered from are listed with
+`fatal: false`. See [Failures and retries](../failures.md). Lambda's entries carry more fields (`type`, `stack`,
+`willRetry`, ...).
 
 ### `outputFile`
 

@@ -47,9 +47,16 @@ Fonts unless you vendor both.
 ## Secrets and the image
 
 - Nothing secret goes into the image. Anyone with access to your registry can read every layer.
-- The containers get no Cloudflare credentials. With R2 they reach the bucket through the Worker, which serves only
-  keys under the render's own prefix.
-- Presigned URLs need R2 S3 keys. They live in Worker secrets and never reach a container.
+- The containers get no Cloudflare credentials and no storage keys, in either storage mode. Through the gateway they
+  reach the bucket through the Worker, which serves only keys under the render's own prefix. With `R2_DIRECT` a task
+  carries presigned URLs: each is good for one method on one object for a limited time, and the coordinator only
+  signs keys under the render's own prefix.
+- Presigned URLs need R2 S3 keys. They live in Worker secrets and never reach a container. An R2 API token usually
+  reaches more than one render needs, so sign as little as possible: one bucket fixed in code, a prefix per user and
+  per job, only the calls a task makes, a short life. `packages/core/src/signer.ts` is that policy for a service with
+  several users ([r2.md](r2.md#sign-as-little-as-possible)).
+- A presigned URL is a credential. It is never written to a log or an error message: `transfer.ts` shows the file
+  name only.
 - `CONTAINER_ENV` is a plain variable. Do not put secrets in it.
 
 ## Files

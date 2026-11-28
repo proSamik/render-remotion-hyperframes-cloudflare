@@ -30,6 +30,16 @@ three.js could not get a WebGL context and its own error path failed. In a conta
 Remotion's bundled browser, or `gl: 'angle'`. Use `webgl: true` and let the engine choose, or `--gl=swangle`. See
 [gl-backends.md](gl-backends.md).
 
+**WebGL worked last month and fails after an image rebuild**
+The browser changed. A browser that is downloaded at build time without a pinned version is a different browser
+after the next build, and `angle-egl` works in some builds and not in others. Pin the version in one place and run
+`packages/core/scripts/webgl-selftest.mjs` as the last build step and at start. See
+[gl-backends.md](gl-backends.md#pin-the-browser-in-one-place-and-prove-it).
+
+**Every request to an instance answers `503` with `"selftest": "failed"`**
+`RENDER_SELFTEST` is set and the command ended with an error. The `output` field of the answer has its last lines.
+The instance will not take work; fix the image.
+
 **Text is missing or in the wrong font**
 The image has no such font. See [fonts.md](fonts.md).
 
@@ -55,6 +65,10 @@ HyperFrames refused its download cache with the message "/ can be changed by ano
 on Cloudflare and not in Docker. Set `HYPERFRAMES_BROWSER_PATH` (and `PRODUCER_HEADLESS_SHELL_PATH`) to the browser
 binary. The example Dockerfiles do.
 
+**HyperFrames and Remotion render WebGL differently in the same image**
+They run different browsers. Point `HYPERFRAMES_BROWSER_PATH`, `PRODUCER_HEADLESS_SHELL_PATH` and
+`REMOTION_WEBGL_BROWSER_EXECUTABLE` at the same pinned binary.
+
 **`hyperframes render ended with code 1`**
 The tail of the CLI output is in the error. Run `npx hyperframes check` in the project locally first.
 
@@ -71,9 +85,27 @@ before you downloaded. Download right after the render, or attach R2.
 **`fleet.instances must be 1 to 4`**
 `MAX_INSTANCES_PER_RENDER` in `wrangler.jsonc`.
 
-**A transfer "arrived damaged"**
+**A transfer "arrived damaged"** (`kind: "checksum_mismatch"`)
 A file changed on the way between instances. The coordinator repeats the transfer; you only see the note in
 `errors`. If it keeps happening, attach R2.
+
+**`stitch failed: ... arrived damaged`**
+A chunk fetched for the join did not have the size or SHA-256 recorded where it was rendered. It was fetched 4 times.
+The join is tried 3 times, then the render fails. Nothing wrong was joined. Look at the bucket: an object that was
+overwritten or cut short by something outside this service.
+
+**`hedge: second run started for a slow chunk`**
+Not an error. A chunk rendered at under half the usual speed and a free slot rendered it a second time. If
+`hedges.started` is high and `hedges.won` stays 0, your hosts are even and hedging only costs: set
+`duplicateStragglers: false`.
+
+**`the joined video has N frames, expected M`**
+The streaming join counted what the muxer wrote and it is not the render's frame count. A chunk is not what the
+coordinator thinks it is: mixed-up `framesPerChunk`, or chunk files from another render in the same folder.
+
+**Progress stays at the same percentage for a while**
+Chunks are being rendered again (an instance restarted). The percentage never goes back; `framesRendered` shows the
+real count. See [progress.md](progress.md).
 
 **Costs higher than expected**
 Instances that were never stopped. `DELETE /renders/<id>` after each render; check

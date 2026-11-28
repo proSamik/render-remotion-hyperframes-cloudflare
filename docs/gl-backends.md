@@ -87,6 +87,42 @@ docker build --platform linux/amd64 --build-arg WEBGL_CHROME_VERSION=158.0.8127.
 
 It adds about 250 MB. The mixed image already has such a browser, because HyperFrames installs one, and uses it.
 
+### Pin the browser, in one place, and prove it
+
+"Which browser can use Mesa" is not a property of a Chrome version number. It differed between two builds of nearby
+versions (above), and nothing fails until a render reaches `new WebGLRenderer`. Three rules came out of that:
+
+1. **One browser, one version, pinned in one place.** A build argument (`WEBGL_CHROME_VERSION` here) or a small JSON
+   file that both the Dockerfile and the code read. Not "latest", not whatever a package downloads on first use.
+   When an image holds Remotion and HyperFrames, point both at the same binary: `REMOTION_WEBGL_BROWSER_EXECUTABLE`
+   for the WebGL chunks here, `HYPERFRAMES_BROWSER_PATH` and `PRODUCER_HEADLESS_SHELL_PATH` for HyperFrames. The
+   mixed example does that.
+2. **Test it as the last step of the image build.** The build fails, not the render:
+
+   ```dockerfile
+   COPY packages/core/scripts/webgl-selftest.mjs /app/webgl-selftest.mjs
+   RUN node /app/webgl-selftest.mjs --browser /usr/local/bin/chrome-headless-shell-webgl --gl angle-egl --require-renderer llvmpipe
+   ```
+
+3. **Test it again when the instance starts.** The host is not the build machine. Set `RENDER_SELFTEST` to the same
+   command (in the Dockerfile's `ENV`, or in `CONTAINER_ENV`). The task server runs it once at start and answers
+   `503` on every route until it has passed, so the coordinator gives the instance no work. A failed self-test is
+   not repeated: the instance stays `503` and is replaced.
+
+`packages/core/scripts/webgl-selftest.mjs` needs nothing but the browser. It opens a page that creates a WebGL2
+context, clears it to one colour, reads the pixel back and reads the renderer string:
+
+```json
+{ "ok": true, "gl": "angle-egl", "renderer": "ANGLE (Mesa/X.org, llvmpipe (LLVM 15.0.6 256 bits), OpenGL ES 3.2)",
+  "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)", "pixel": [51, 153, 255, 255], "seconds": 1.4, "problems": [] }
+```
+
+That output is what the prototype's image printed with chrome-headless-shell 152.0.7977.54, at every build and at
+every start (1.2 to 1.9 s). In this repository the script ran on macOS only: with Remotion's browser, `angle` gave
+the Metal renderer, `swangle` gave SwiftShader, and `angle-egl` failed with "no WebGL2 context", as it should on a
+Mac. The start hook has a unit test. **Neither ran in an image build or on Cloudflare here**, and the example
+Dockerfiles do not call the script yet.
+
 Rendering with a browser build that Remotion did not test is outside what Remotion supports. Keep `swangle` as the
 fallback: `chromiumOptions: { gl: 'swangle' }` or `--gl=swangle` overrides the automatic choice.
 

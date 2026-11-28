@@ -61,7 +61,7 @@ control. It is an unofficial community package with a short test history.
 | Maintained by Remotion | yes | yes, experimental | critical fixes only, alpha | no |
 | Distributed rendering | yes | no | no | yes, H.264 only |
 | Progress | yes | yes | yes | yes |
-| Retries | yes | | | yes, plus chunk deadlines and duplicate stragglers |
+| Retries | yes | | | yes, plus chunk deadlines and a second run for measurably slow chunks |
 | Stills | yes | yes | yes | yes |
 | Webhooks | yes | no | yes (status webhook) | no |
 | Cost estimation | yes | no | no | yes, from measured CPU time |

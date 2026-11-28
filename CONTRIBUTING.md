@@ -5,8 +5,8 @@ This is a guide first and a code base second. The most useful contributions:
 1. **What broke for you.** Open an issue with the command, the `errors` array of the render's progress, and where it
    ran (local, Docker, Cloudflare).
 2. **Numbers.** Your content type, instance count, `costs` from the result, and what the Cloudflare bill said.
-3. **Things marked "not run"** in the README that you ran: presigned URLs, large outputs, more instances, a deploy
-   built by wrangler with local Docker.
+3. **Things marked "not run"** in the README that you ran: presigned URLs and `R2_DIRECT` against real R2, the
+   streaming join on Cloudflare, large outputs, more instances, a deploy built by wrangler with local Docker.
 
 ## Working on the code
 

@@ -47,3 +47,6 @@ Hosts are also restarted by Cloudflare "on an irregular cadence". Same handling.
 There is no setting for it. An instance stays up while something talks to it. If you render all day and want no cold
 starts, raise `INACTIVITY_TIMEOUT_SECONDS` (maximum 6 hours) and accept the idle cost: one idle `standard-4` is
 $0.113 per hour. We did not build a warm pool.
+
+What the prototype of this design learned about warming (a small pool, warming during the upload, never a whole
+fleet per job) is in [planning.md](planning.md#warm-instances).

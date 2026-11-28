@@ -66,7 +66,9 @@ node packages/cloudflare-containers/bin/remotion-cloudflare.mjs render <Composit
   --props='{"title":"Hello"}' --concurrency=4 --out=out/video.mp4
 ```
 
-Add `--webgl` when the composition uses three.js, shaders or any WebGL.
+Add `--webgl` when the composition uses three.js, shaders or any WebGL. For a video whose chunks plus output would
+not fit one 20 GB disk (more than about an hour of 1080p), add `--stitch=stream` and read
+[docs/long-videos.md](docs/long-videos.md) first: that path has not run on Cloudflare in this repository.
 
 ## HTTP, if you cannot run Node
 
@@ -102,4 +104,7 @@ Compare the SHA-256 of the download with `outputSha256` from the progress.
 
 ## When it fails
 
-Read `errors` in the progress first. Then [docs/troubleshooting.md](docs/troubleshooting.md).
+Read `errors` in the progress first. Each entry has a `kind` (`chunk_failed`, `chunk_deadline`, `checksum_mismatch`,
+`job_failed`, ...) and `fatal`. Entries with `fatal: false` were recovered from; do not report them as failures.
+Then [docs/troubleshooting.md](docs/troubleshooting.md). `overallProgress` never goes back, so a number that waits is
+work being repeated, not a hang; a render that is stuck ends by itself with `fatalErrorEncountered: true`.
