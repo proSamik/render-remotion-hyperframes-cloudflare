@@ -31,10 +31,17 @@ From https://developers.cloudflare.com/containers/platform/limits/ and /containe
 | `standard-3` | 2 | 8 GiB | 16 GB |
 | `standard-4` | 4 | 12 GiB | 20 GB |
 
-- **Custom sizes**: with the Durable Object scheduling policy used here, `ctx.container.start({ vcpu, memoryMib,
-  diskMb, ... })` instead of a named `instance`. Minimum 1/16 vCPU (`0.0625`), 256 MiB, 2 GB (`2000` MB); the maximum
-  per instance is your account limit, by default 4 vCPU, 12 GiB and 20 GB, which Cloudflare can raise on request.
-  This repository passes the named type from `INSTANCE_TYPE` (`standard-4`: rendering wants every core).
+- **Custom sizes**: with the Durable Object scheduling policy used here, pass the size inside `instance`:
+  `ctx.container.start({ instance: { vcpu, memoryMib, diskMb }, ... })`. Put at the top level, the three fields are
+  ignored without an error and the instance starts as `lite` (1/16 vCPU, 256 MiB), which looks like a hang (measured
+  2026-11-29). Minimum 1/16 vCPU (`0.0625`), 256 MiB, 2 GB (`2000` MB); the maximum per instance is your account
+  limit, by default 4 vCPU, 12 GiB and 20 GB, which Cloudflare can raise on request. This repository passes the named
+  type from `INSTANCE_TYPE` (`standard-4`: rendering wants every core).
+- **Memory is billed at the custom size, with no per-vCPU floor** (measured 2026-11-29 with the GraphQL dataset
+  `containersUsageAdaptiveGroups`: a 4 vCPU / 8 GiB instance was billed 8 GiB-seconds per second, a `lite` instance
+  256 MiB). Rendering at 1080p peaked at 1.4–2.0 GiB per instance (cgroup `memory.peak`) with the same speed and
+  byte-identical output, so **4 vCPU / 8 GiB is about 10–14 % cheaper than `standard-4` for outputs up to 1080p**.
+  Keep 12 GiB for 1440p and 4K.
 - **Billing**, in 10 ms steps while an instance runs: CPU on **active use** ($0.000020 per vCPU-second), memory
   ($0.0000025 per GiB-second) and disk ($0.00000007 per GB-second) on the **provisioned** size, busy or idle.
   Workers Paid includes 375 vCPU-minutes, 25 GiB-hours of memory and 200 GB-hours of disk per month. Egress:
