@@ -183,6 +183,41 @@ Heavier, real content, measured earlier on the same platform in the private prot
 | A 3D model in WebGL, on Mesa llvmpipe | 0.044 |
 | The same on SwiftShader | 0.127 |
 
+### A long real job: one 1:44:00 project on each speed tier
+
+A 1:44:00 mixed test project (HyperFrames, Remotion, 3D, footage), 187,200 frames at 1920x1080 and 30 fps, rendered
+from a cold start by the prototype of this design through R2 with presigned URLs, November 2026. Durations are
+h:mm:ss or mm:ss.
+
+Table 1, Cloudflare, **measured**:
+
+| Tier | Video length | Project size | Final video | Upload (hash + plan + upload) | Render (start to download link) | Download | Total | Cloudflare cost (compute + R2) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Standard | 1:44:00 | 1.89 GB | 7.99 GB | 5:49 | 7:36 | 19:35 | 33:18 | $2.23 |
+| Fast | 1:44:00 | 1.89 GB (already in R2) | 7.69 GB | 0:12 | 6:33 | 21:16 | 28:28 | $2.50 |
+| Economy | 1:44:00 | 1.89 GB (already in R2) | 8.15 GB | 0:17 | 12:46 | 19:55 | 33:17 | $2.10 |
+
+Table 2, the same jobs on AWS, **estimated** (nothing was run on AWS):
+
+| Tier | Remotion Lambda compute, low to high | S3 egress of the final video | S3 storage + requests | AWS total | Cloudflare (measured) |
+| --- | --- | --- | --- | --- | --- |
+| Standard | $1.47 to $2.50 | $0.67 | about $0.03 | $2.17 to $3.20 | $2.23 |
+| Fast | $1.59 to $2.70 | $0.64 | about $0.03 | $2.26 to $3.37 | $2.50 |
+| Economy | $1.45 to $2.46 | $0.68 | about $0.03 | $2.16 to $3.17 | $2.10 |
+
+Notes:
+
+* Upload is 0:12 to 0:17 on the later runs because inputs are content-addressed and were already in R2.
+* Download is limited by the test machine's line (about 6 to 7 MB/s). R2 has no egress fee.
+* Lambda compute = the measured vCPU-seconds x $0.000023 per vCPU-second (2048 MB functions, arm64, us-east-1, list
+  price: $0.0000133334 per GB-second, 1.158 vCPU per function). High = x 1.7 for the SwiftShader (`swangle`) penalty
+  that Lambda's forced GL backend adds; low = no penalty. S3 egress at $0.09 per GB.
+* Not included on the AWS side: functions reading the inputs from S3 also count as data transfer according to
+  Remotion's documentation (at least $0.17 for 1.89 GB read once).
+* Honest reading: Cloudflare is cheaper by up to about a third on this job. It saves the $0.65 to $0.70 of egress
+  and the `swangle` penalty, but pays for provisioned memory ($0.74 to $0.91 here), so with no penalty Lambda
+  roughly ties.
+
 Method: CPU seconds are the virtual machine's busy time from `/proc/stat` while it works; cost is
 `cpuSeconds x $0.000020 + instanceSeconds x $0.0000314`. We did not compare this with the Cloudflare bill. Every
 render reports its own numbers. Full tables, what is left out, and how to measure your own:
