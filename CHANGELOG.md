@@ -2,7 +2,21 @@
 
 ## Unreleased
 
-Lessons from a private prototype of the same design, which ran one-hour jobs on 100 to 292 Cloudflare `standard-4`
+Output resolution and results from the prototype's final round (2026-11-28):
+
+- **`packages/core/src/resolution.ts`**: a quality name (`360p` to `2160p`, `2k`, `4k`, or the composition's size)
+  becomes Remotion's `scale`, the output size and a bitrate. Sizes come out even without cropping (854 x 480 where
+  Remotion's own rounding would cut two columns). `RESOLUTION_FACTORS` / `ratesForOutput()` move planner rates to
+  another size, from measurements at all six sizes. Unit tests in `packages/core/test/resolution.test.ts`.
+- **docs/resolution.md**: rules for a chunked render at another size (one scale per job, pre-rendered layers rendered
+  for the output size above the composition's, streaming join for 4K), the measured cost per size (not linear in
+  pixels), a 1:44:00 project at 480p, 720p and 1080p and 11 minutes at 4K, and "preview first, then the final".
+  README: a table of those runs.
+- **docs/failures.md**: seven failure drills to run against a deployment, with what must happen, and the four bugs
+  they found in the prototype. **docs/chunking.md**: why the joined audio is 43-96 ms longer than the video and why
+  to leave it. **docs/planning.md**: output size changes the rates; how close a sample-based estimate got.
+
+Earlier in this release: lessons from a private prototype of the same design, which ran one-hour jobs on 100 to 292 Cloudflare `standard-4`
 instances on 2026-11-27 and 28. Written again for this repository. **Everything below ran locally on macOS: 39 unit
 tests, the three examples, whole renders against an S3 stand-in in memory. CI runs the same on Linux. None of it has
 been deployed to Cloudflare from this code base yet.** The Cloudflare results in the README are those of 0.1.0.

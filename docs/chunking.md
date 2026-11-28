@@ -55,6 +55,12 @@ In every run the beeps arrive 45.6 ms after their second mark, by the same amoun
 So nothing drifts. The constant offset is there in a single unchunked render too. It is not caused by chunking.
 We did not find out where it comes from.
 
+The joined audio is also **a few AAC frames longer than the video**: 2048 or 4096 samples (43 or 85 ms at 48 kHz)
+on a whole timeline, 53 to 96 ms on a range that does not start at frame 0. That is the AAC frame padding of
+Remotion's seamless join, identical in `combineChunks()` itself. Leave it: an exact trim needs an edit list (which a
+streamed fragmented MP4 cannot carry reliably) or a re-encode of the audio, and dropping whole AAC packets cuts at
+21 ms steps and can cut real sound. Players stop at the end of the video.
+
 Earlier, with a different and longer composition, we measured 24 chunks from 8 instances over 10 minutes:
 18,000 of 18,000 frames, every flash on its frame, no audio drift over 23 joins.
 

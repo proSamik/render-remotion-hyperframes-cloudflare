@@ -136,6 +136,28 @@ for (const error of progress.errors) {
 The entries carry ids, indexes and error text. They never carry file contents, input props or the query string of a
 URL (a presigned URL is a credential; `transfer.ts` cuts it off before an error message is made).
 
+## Failure drills: what to try on purpose before you trust it
+
+Each drill below was run on Cloudflare `standard-4` by the prototype of this design (November 2026) against a
+4-minute 1080p range of a mixed project. Run the same ones against your deployment; each should end in the stated
+state and leave one structured event per failure.
+
+| Drill | How | What must happen |
+| --- | --- | --- |
+| Instance killed mid-render | destroy two instances while their chunks render | their chunks run elsewhere, not counted as attempts; job ready |
+| Corrupted chunk in storage | overwrite one chunk object with random bytes of the same size between its upload and the join | the join's SHA-256 check refuses it (after 3 fetches), the chunk is rendered again, the join runs again; the output's video stream was byte-identical to an uncorrupted run |
+| Cancel mid-render | cancel while chunks run | every task stops, instances go back, no instance is started for the job afterwards |
+| Upload killed | kill the client during a multipart upload, three times | the next run sends only the missing parts |
+| Token expiry | a 25 s token during a 3-minute job | the old token gets 401 `token_expired`, a fresh one continues, an open progress stream is closed at the token's expiry |
+| Isolation | user B's token against user A's job id | 403 for status, events, download and cancel; nothing of A's in the answers |
+| Webhook down | the receiver answers 500 | the job is still ready; the webhook is tried three times, then one `webhook_failed` event |
+
+Four bugs these drills found in the prototype, worth checking in any design like this one: an instance was started
+for a job after the job had ended (a late "I need N instances" reached the pool); a progress stream outlived its
+token; asking for part URLs of an upload id that storage does not know failed with a server error instead of 404; and
+a frame range read the whole project's heavy seconds as "this range is all heavy" and started 40 instances for a plan
+of 16.
+
 ## What ran where
 
 - The failures above happened in the prototype, on Cloudflare.

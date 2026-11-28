@@ -220,6 +220,25 @@ Notes:
   and the `swangle` penalty, but pays for provisioned memory ($0.60 to $0.91 here), so with no penalty Lambda
   roughly ties.
 
+### The same project at other output sizes
+
+Same project, Standard tier, inputs already in R2. Output size is one option (`scale` plus a bitrate per size,
+[docs/resolution.md](docs/resolution.md)). The download column is the test machine's line, which was slower on these
+runs than on the 1080p one.
+
+| Output | Video length | Final video | Upload | Render (start to download link) | Download | Total | Cloudflare cost |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 480p (854 x 480) | 1:44:00 | 2.23 GB | 0:16 | 8:08 | 11:42 | 20:22 | $1.59 |
+| 720p (1280 x 720) | 1:44:00 | 4.14 GB | 0:15 | 7:03 | 13:20 | 20:55 | $1.68 |
+| 1080p (1920 x 1080) | 1:44:00 | 7.99 GB | 5:49 | 7:36 | 19:35 | 33:18 | $2.23 |
+| 2160p (3840 x 2160), first 11 minutes | 11:00 | 2.90 GB | 0:16 | 4:41 | 12:29 | 17:43 | $0.56 |
+| 1080p, the same 11 minutes | 11:00 | 0.84 GB | 0:17 | 3:05 | not downloaded | | $0.28 |
+
+Cost is not linear in pixels: 480p cost 71 % of 1080p, and 4K about 2x, because a frame has a fixed part
+(React, layout, video seeks, WebGL draw calls) and shader effects cost the same at any size. **Render a fast 480p or
+720p preview for approval, then the final**: the preview's file is a quarter to half the size and downloads sooner.
+Just do not expect it to cost a fifth.
+
 Method: CPU seconds are the virtual machine's busy time from `/proc/stat` while it works; cost is
 `cpuSeconds x $0.000020 + instanceSeconds x $0.0000314`. We did not compare this with the Cloudflare bill. Every
 render reports its own numbers. Full tables, what is left out, and how to measure your own:
@@ -331,6 +350,7 @@ More: [docs/security.md](docs/security.md).
 | Cold starts and warm instances | [docs/cold-starts.md](docs/cold-starts.md) |
 | Failures, retries, hedging, checksums, errors as events | [docs/failures.md](docs/failures.md) |
 | Long videos: the streaming join, MP4 and fragmented MP4, disk limits | [docs/long-videos.md](docs/long-videos.md) |
+| Output resolution: previews and finals, even sizes, cost per size | [docs/resolution.md](docs/resolution.md) |
 | Large inputs: resumable multipart uploads, reading media by range | [docs/inputs.md](docs/inputs.md) |
 | Planning a fleet: tiers, cost classes, warm instances, fair sharing | [docs/planning.md](docs/planning.md) |
 | Concurrency and many jobs at once | [docs/concurrency.md](docs/concurrency.md) |

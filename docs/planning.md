@@ -144,3 +144,22 @@ media. Between two users that is a leak. The prototype's rules:
 This repository avoids the question: an instance's name starts with the render id, it is never shared between
 renders, and it is destroyed when the render ends ([concurrency.md](concurrency.md)). That is the safe default. A
 pool is worth its rules only when cold starts are what your users wait for.
+
+## Output size changes the rates
+
+A plan made from 1080p rates is wrong for a 480p preview or a 4K final, and not by the pixel ratio. Measured on
+`standard-4`: footage and motion graphics run 1.28x faster at 480p and 0.43x as fast at 4K; heavy WebGL effects
+1.14x and 0.73x. `packages/core/src/resolution.ts` has the table and `ratesForOutput()` to move planner rates; details
+and a measured 1:44:00 project at 480p, 720p and 1080p in [resolution.md](resolution.md).
+
+## How good an estimate gets
+
+The prototype estimated time and cost before rendering from a few sample renders of the project itself (12 samples of
+1-2 s, about 2 minutes and 3 cents). Against the real renders it did not see:
+
+- long jobs (1:44:00, four tiers, 480p and 720p): time within -6 % to +39 %, cost within -4 % to +18 %;
+- short jobs (20 s fixtures): time within -26 % to +64 %, because start-up dominates them;
+- an 11-minute 4K range: cost -6 %, time -37 % (4K chunks and the join of 35 Mbit/s output are slower than the
+  per-frame model says).
+
+Show it as "about", charge what was measured, and cap the charge at the estimate plus a stated margin.
