@@ -15,7 +15,51 @@ of CPU. Included per month: 375 vCPU-minutes, 25 GiB-hours, 200 GB-hours of disk
 America and Europe after 1 TB included; more elsewhere. Workers and Durable Object requests are billed separately and
 are fractions of a cent per render. Workers Paid has a $5 monthly minimum.
 
-So a render costs `cpuSeconds x 0.00002 + instanceSeconds x 0.0000314`. `estimatePrice()` computes exactly that.
+So a render costs `cpuSeconds x 0.00002 + instanceSeconds x 0.0000314`, plus container egress of about 2 x the output
+size once the monthly allowance is used ([below](#container-egress)). `estimatePrice()` computes exactly that.
+
+## Container egress
+
+Cloudflare bills bytes that containers send out ("Egress from Containers": $0.025 per GB in North America and
+Europe after 1 TB included per month, $0.04 elsewhere after 500 GB, $0.05 in Oceania, Korea and Taiwan after 500 GB;
+https://developers.cloudflare.com/containers/pricing/). The pricing, FAQ and outbound-traffic pages do not say what
+counts as egress, so we measured it (2026-11-28, private implementation of this design, `standard-4`).
+
+A render's containers send every chunk to storage and the joining instance sends the final file: about **2 x the
+output size** per render (chunks were 1.03 x the output). For a 1:44:00 video at 10 Mbit/s that is about 16 GB.
+Downloads by your users from R2 are free, and so is anything a container receives.
+
+**Routing uploads through the Worker does not avoid it.** We ran the same 20 s renders with the containers uploading
+(a) over presigned URLs to the public R2 endpoint and (b) to a hostname that the Durable Object intercepts with
+`ctx.container.interceptOutboundHttp()`, handled by a `WorkerEntrypoint` that writes through the R2 binding. Both
+outputs were byte-identical. Cloudflare's GraphQL Analytics dataset `containersUsageAdaptiveGroups` (field
+`sum.txBytes`; its daily totals matched the dashboard's egress figure exactly) counted path (b) exactly like path (a):
+
+| Path | Bytes the containers sent | Billed `txBytes` in that window |
+| --- | --- | --- |
+| (b) outbound handler + R2 binding, two renders at once | 2 x 52,649,639 | 106.2 MB |
+| (a) presigned URL to the public R2 endpoint | 52,649,639 | 53.0 MB |
+
+So treat **every byte a container sends** as egress, whatever the destination. Options that do reduce it: a lower
+bitrate, fewer hedged or repeated chunks, and joining on the instance that rendered most of the chunks (its own
+chunks never leave it). The outbound-handler path is still useful for other reasons (no storage keys in the
+container); this guide's gateway mode uses it.
+
+How to read your own: query `containersUsageAdaptiveGroups { sum { txBytes } dimensions { datetimeMinute } }` for your
+account in the GraphQL Analytics API (https://developers.cloudflare.com/analytics/graphql-api/) around one render,
+with nothing else running. The broader `containersMetricsAdaptiveGroups.txBytes` counts several times more than
+the bill does (traffic to the Durable Object included); use the usage dataset.
+
+## Idle warm instances
+
+Memory and disk are billed while an instance runs, idle or not (CPU only when used). A pool that keeps instances warm
+after a render for the next one bills $0.0000314 per second per `standard-4` while it waits. In the private
+implementation (up to 4 instances kept warm for 240 s after each render) Cloudflare billed 266,678 instance-seconds
+of memory on one day against 190,800 that the renders themselves recorded: **28 % of the memory bill was idle time**,
+and memory was 47.6 % of CPU + memory on the bill against about 40 % in the per-render numbers. Warm instances were
+reused for about 29 % of the instance starts, but a start with the image already at the location took 2.6 to 3.6 s, so
+waiting warm instances saved seconds, not minutes. Keep the warm pool small and short (one or two instances, a
+couple of minutes), and charge it to the render that left it behind when you price renders.
 
 ## What we measured
 
@@ -78,7 +122,8 @@ the prototype said 86,042 vCPU-seconds before that correction and 58,800 after.
   footage.
 - A slow cold start (up to 116 s seen): memory and disk are billed while the image is pulled.
 - Hosts differ. The same chunk took 93 to 191 s on eight instances of one run.
-- Egress of the finished file, R2 storage, the Remotion licence (see the README).
+- Container egress (above): about 2 x the output size per render, billed beyond the monthly allowance.
+- Warm instances waiting for the next render (above), R2 storage, the Remotion licence (see the README).
 
 Short renders therefore cost more per minute than long ones.
 

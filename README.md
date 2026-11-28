@@ -17,6 +17,92 @@ read [AGENTS.md](AGENTS.md).
 
 This is a community guide. It is not made or endorsed by Remotion, HeyGen or Cloudflare.
 
+**Licence, in one paragraph.** You deploy this to your own Cloudflare account and render your own Remotion /
+HyperFrames code. Remotion's licence applies to you as the deployer (free for individuals and companies up to 3
+people; larger companies need a Remotion company licence). Don't turn your deployment into a service where other
+people upload their own Remotion code; Remotion's licence doesn't allow that without their approval. Details and
+quotes: [Licences](#licences).
+
+## What we observed
+
+One 1:44:00 mixed project (HyperFrames, Remotion, 3D, footage) rendered at 1080p30, per job, list prices,
+November 2026. Cloudflare numbers are **measured** (by the private implementation of this design, see
+[Status](#status)); AWS numbers are **estimated** (nothing was run on AWS).
+
+| | Cloudflare | AWS Lambda + S3 |
+|---|---|---|
+| Compute (Standard tier) | $2.13 (measured) | $1.47 – $2.50 (estimated) |
+| Container egress (chunks + final file, 16.2 GB measured) | $0 within the 1 TB/month included (NA/EU), $0.41 above it at $0.025/GB | $0 (Lambda → S3 in the same region) |
+| User downloads the 8 GB final video | $0 (R2 has no egress fee) | ~$0.67 ($0.09/GB) |
+| Storage + requests | ~$0.10 | ~$0.03 |
+| Idle warm instances after the job (memory + disk only) | up to ~$0.03 (4 instances kept 240 s, if no job reuses them) | $0 |
+| Total | $2.23; ~$2.64 above 1 TB/month, ~$2.67 with idle warm time | $2.17 – $3.20 |
+
+Roughly a tie. Cloudflare is equal or a bit cheaper per job, and clearly cheaper when users download the result more
+than once (R2 has no egress fee). Two costs are easy to miss: **container egress is billed beyond the monthly
+allowance**, and **idle warm instances bill memory and disk**. We tested routing the containers' uploads through the
+Worker's R2 binding (an outbound handler) instead of the public R2 endpoint: Cloudflare's usage analytics counted
+those bytes as container egress byte for byte, so it does not save egress ([costs](docs/costs.md#container-egress)).
+Per-tier tables follow; resolution and smaller examples are further down in [Cost and speed](#cost-and-speed).
+
+
+### A 1:44:00 project on four speed tiers
+
+A 1:44:00 mixed test project (HyperFrames, Remotion, 3D, footage), 187,200 frames at 1920x1080 and 30 fps, rendered
+from a cold start by the prototype of this design through R2 with presigned URLs, November 2026. Durations are
+h:mm:ss or mm:ss.
+
+Table 1, Cloudflare, **measured**:
+
+| Tier | Video length | Project size | Final video | Upload (hash + plan + upload) | Render (start to download link) | Download | Total | Cloudflare cost (compute + R2) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Standard | 1:44:00 | 1.89 GB | 7.99 GB | 5:49 | 7:36 | 19:35 | 33:18 | $2.23 |
+| Fast | 1:44:00 | 1.89 GB (already in R2) | 7.69 GB | 0:12 | 6:33 | 21:16 | 28:28 | $2.50 |
+| Economy | 1:44:00 | 1.89 GB (already in R2) | 8.15 GB | 0:17 | 12:46 | 19:55 | 33:17 | $2.10 |
+| Saver | 1:44:00 | 1.89 GB (already in R2) | 8.15 GB | 0:12 | 18:15 | 21:25 | 40:13 | $1.71 |
+
+Table 2, the same jobs on AWS, **estimated** (nothing was run on AWS):
+
+| Tier | Remotion Lambda compute, low to high | S3 egress of the final video | S3 storage + requests | AWS total | Cloudflare (measured) |
+| --- | --- | --- | --- | --- | --- |
+| Standard | $1.47 to $2.50 | $0.67 | about $0.03 | $2.17 to $3.20 | $2.23 |
+| Fast | $1.59 to $2.70 | $0.64 | about $0.03 | $2.26 to $3.37 | $2.50 |
+| Economy | $1.45 to $2.46 | $0.68 | about $0.03 | $2.16 to $3.17 | $2.10 |
+| Saver | $1.20 to $2.04 | $0.68 | about $0.03 | $1.91 to $2.75 | $1.71 |
+
+Notes:
+
+* The Cloudflare column has no container egress in it: about 16 GB per job (chunks and the final file, sent by the
+  containers to R2), $0 inside the account's monthly allowance, about $0.40 above it. See [What we observed](#what-we-observed).
+* Upload is 0:12 to 0:17 on the later runs because inputs are content-addressed and were already in R2.
+* Download is limited by the test machine's line (about 6 to 7 MB/s). R2 has no egress fee.
+* Lambda compute = the measured vCPU-seconds x $0.000023 per vCPU-second (2048 MB functions, arm64, us-east-1, list
+  price: $0.0000133334 per GB-second, 1.158 vCPU per function). High = x 1.7 for the SwiftShader (`swangle`) penalty
+  that Lambda's forced GL backend adds; low = no penalty. S3 egress at $0.09 per GB.
+* Not included on the AWS side: functions reading the inputs from S3 also count as data transfer according to
+  Remotion's documentation (at least $0.17 for 1.89 GB read once).
+* Honest reading: Cloudflare is cheaper by up to about a third on this job. It saves the $0.65 to $0.70 of egress
+  and the `swangle` penalty, but pays for provisioned memory ($0.60 to $0.91 here), so with no penalty Lambda
+  roughly ties.
+
+## Why Cloudflare
+
+Cost is roughly a tie (above). Choose Cloudflare for the developer experience, not for a big saving:
+
+- **AWS**: new accounts start with reduced Lambda limits ("New AWS accounts have reduced concurrency and memory quotas
+  for Lambda Functions", https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html). The default of
+  1,000 concurrent executions per region is reached only as AWS raises the quota with use, or after a request in
+  the Service Quotas console. Setting up Lambda, S3, IAM roles and policies, regions and quotas through the console
+  is a lot to learn for a first deployment.
+- **Cloudflare**: everything is set up and deployed with the wrangler CLI: one config file (`wrangler.jsonc`),
+  `wrangler deploy`, `wrangler secret put`, `wrangler r2 bucket create`. The bill is short and readable (CPU,
+  memory, disk, egress per product) and budget alerts are simple to set in the dashboard. R2 has no egress fee for
+  downloads. Container account limits are generous by default (15,000 concurrent vCPU, 60 TiB memory, 300 TB disk
+  per account) and "To request higher limits, contact your account team or Cloudflare Support"
+  (https://developers.cloudflare.com/containers/platform/limits/).
+- The Remotion licence is the same on both: see [Licences](#licences).
+
+
 ## Status
 
 Written and tested in November 2026 with Remotion 4.0.530, HyperFrames 0.9.103, wrangler 4.169.0.
@@ -195,40 +281,8 @@ Heavier, real content, measured earlier on the same platform in the private prot
 
 ### A long real job: one 1:44:00 project on each speed tier
 
-A 1:44:00 mixed test project (HyperFrames, Remotion, 3D, footage), 187,200 frames at 1920x1080 and 30 fps, rendered
-from a cold start by the prototype of this design through R2 with presigned URLs, November 2026. Durations are
-h:mm:ss or mm:ss.
-
-Table 1, Cloudflare, **measured**:
-
-| Tier | Video length | Project size | Final video | Upload (hash + plan + upload) | Render (start to download link) | Download | Total | Cloudflare cost (compute + R2) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Standard | 1:44:00 | 1.89 GB | 7.99 GB | 5:49 | 7:36 | 19:35 | 33:18 | $2.23 |
-| Fast | 1:44:00 | 1.89 GB (already in R2) | 7.69 GB | 0:12 | 6:33 | 21:16 | 28:28 | $2.50 |
-| Economy | 1:44:00 | 1.89 GB (already in R2) | 8.15 GB | 0:17 | 12:46 | 19:55 | 33:17 | $2.10 |
-| Saver | 1:44:00 | 1.89 GB (already in R2) | 8.15 GB | 0:12 | 18:15 | 21:25 | 40:13 | $1.71 |
-
-Table 2, the same jobs on AWS, **estimated** (nothing was run on AWS):
-
-| Tier | Remotion Lambda compute, low to high | S3 egress of the final video | S3 storage + requests | AWS total | Cloudflare (measured) |
-| --- | --- | --- | --- | --- | --- |
-| Standard | $1.47 to $2.50 | $0.67 | about $0.03 | $2.17 to $3.20 | $2.23 |
-| Fast | $1.59 to $2.70 | $0.64 | about $0.03 | $2.26 to $3.37 | $2.50 |
-| Economy | $1.45 to $2.46 | $0.68 | about $0.03 | $2.16 to $3.17 | $2.10 |
-| Saver | $1.20 to $2.04 | $0.68 | about $0.03 | $1.91 to $2.75 | $1.71 |
-
-Notes:
-
-* Upload is 0:12 to 0:17 on the later runs because inputs are content-addressed and were already in R2.
-* Download is limited by the test machine's line (about 6 to 7 MB/s). R2 has no egress fee.
-* Lambda compute = the measured vCPU-seconds x $0.000023 per vCPU-second (2048 MB functions, arm64, us-east-1, list
-  price: $0.0000133334 per GB-second, 1.158 vCPU per function). High = x 1.7 for the SwiftShader (`swangle`) penalty
-  that Lambda's forced GL backend adds; low = no penalty. S3 egress at $0.09 per GB.
-* Not included on the AWS side: functions reading the inputs from S3 also count as data transfer according to
-  Remotion's documentation (at least $0.17 for 1.89 GB read once).
-* Honest reading: Cloudflare is cheaper by up to about a third on this job. It saves the $0.65 to $0.70 of egress
-  and the `swangle` penalty, but pays for provisioned memory ($0.60 to $0.91 here), so with no penalty Lambda
-  roughly ties.
+The per-tier tables (Cloudflare measured, AWS estimated) are at the top of this page:
+[a 1:44:00 project on four speed tiers](#a-104400-project-on-four-speed-tiers).
 
 ### The same project at other output sizes
 
@@ -308,7 +362,7 @@ https://github.com/remotion-dev/remotion/blob/main/LICENSE.md). Quoted from thos
 
 Where you render does not change this. The licence is the same on Lambda, on your laptop and here.
 
-### You may not run a render service for other people's Remotion code
+### Don't run a service for other people's Remotion code
 
 From Remotion's terms (https://www.remotion.dev/docs/terms):
 
@@ -396,9 +450,15 @@ More: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 Honest list. Read it before you depend on this.
 
-- **Young code.** Written in November 2026 and run a few dozen times on one account, with at most 4 instances in
-  this code base. The larger numbers (8 to 292 instances, 10 minutes to one hour of video, 93 jobs and more) come
-  from a private prototype with the same design and its own code.
+- **Young code (state on 2026-11-28).** Which numbers come from which code:
+  - **This repository's code** has run locally (Node and Docker), in CI on Linux, and on Cloudflare a few dozen
+    times on one account, with at most 4 instances per render (version 0.1.0; later versions not yet on
+    Cloudflare). The small-example tables in [Cost and speed](#cost-and-speed) are from this code.
+  - **A private implementation of the same design** (its own code) produced the larger numbers: the 1:44:00 mixed
+    project on four speed tiers and at 360p to 4K, up to 292 instances per job, 7 of 7 failure drills (instance
+    killed, cancel, upload resume, token expiry, two users' isolation, failing webhook, corrupted chunk), two users
+    rendering at once, about 100 jobs on 2026-11-27 and 28, and the container-egress test of
+    [docs/costs.md](docs/costs.md#container-egress). Tables from it say so.
 - **The newest changes have not been on Cloudflare.** The measured hedging, the per-run file names, the checked
   downloads, the streaming join, direct transfer over presigned URLs and the self-test hook ran on one Mac, against
   stand-ins, and are checked by CI. The examples on Cloudflare ran with the version before.

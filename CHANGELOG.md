@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Container egress and idle warm time (2026-11-28, measured with the private implementation of this design; docs only):
+
+- **Container egress is billed, and the R2 binding does not avoid it.** Cloudflare bills bytes that containers send
+  out ($0.025/GB in North America and Europe after 1 TB per month included account-wide; more elsewhere). A render's
+  containers send about 2 x the output size (chunks, then the joined file). Uploads routed through an outbound
+  handler (`interceptOutboundHttp` + a `WorkerEntrypoint` writing with the R2 binding) were counted in Cloudflare's
+  usage analytics (`containersUsageAdaptiveGroups.txBytes`) byte for byte like uploads to the public R2 endpoint.
+  Generic lesson: before you route bytes through the Worker to save egress, measure; in our test it saved nothing.
+- **Idle warm instances bill memory and disk**: 28 % of one day's billed memory was idle pool time that no render
+  recorded. Keep warm pools small and short, and price them into renders.
+- README: "What we observed" (per-job Cloudflare vs AWS Lambda + S3, container egress included) and the per-tier
+  tables moved to the top; "Why Cloudflare"; a shorter licence note near the top; the "Young code" note says which
+  numbers come from which code. docs/costs.md: container egress, idle warm instances, how to read `txBytes`.
+  docs/r2.md: the gateway does not save egress.
+
 Split rendering for pure HyperFrames videos (2026-11-28). **Ran on one Mac (up to 8 local instances) and in CI on
 Linux. Not run in Docker or on Cloudflare.**
 
