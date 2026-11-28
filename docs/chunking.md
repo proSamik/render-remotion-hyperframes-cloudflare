@@ -1,5 +1,7 @@
 # Chunking and joins
 
+![A 10 s Remotion composition cut into six chunks of 50 frames; each is rendered with codec h264-ts and the same compositionStart, then combineChunks() on one instance copies the video and joins the audio on one grid into out.mp4](diagrams/chunking.svg)
+
 One video is split into frame ranges ("chunks"), equal for Remotion. Each chunk is rendered by its own process, on any instance.
 One instance then joins them. This page says what makes the join seamless, for picture and for sound.
 

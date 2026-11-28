@@ -1,5 +1,7 @@
 # Split rendering of pure HyperFrames videos
 
+![Pure HyperFrames split: index.html goes through the determinism pre-flight; with a finding it renders in one piece with a warning, otherwise HyperFrames plans once on instance 1 and shares the plan through R2, four chunks render frame ranges to MPEG-TS at their timeline place, and one instance joins them with one audio mix](diagrams/hyperframes-split.svg)
+
 A long HyperFrames video can render on many container instances at once, like a Remotion video: the coordinator cuts
 it into frame ranges, each range renders as a chunk in its own process on any instance, and one instance joins the
 chunks without encoding the picture again. This page says how that works, what a composition must do for it, and

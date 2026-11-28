@@ -45,6 +45,8 @@ From https://developers.cloudflare.com/containers/platform/limits/ and /containe
 
 ## Container egress
 
+![Billed on Cloudflare: vCPU-seconds, memory and disk while running, container egress including traffic to the Worker; free: downloads from R2. On AWS: Lambda GB-seconds billed, S3 downloads billed](diagrams/cost-flow.svg)
+
 Cloudflare bills bytes that containers send out ("Egress from Containers": $0.025 per GB in North America and
 Europe after 1 TB included per month, $0.04 elsewhere after 500 GB, $0.05 in Oceania, Korea and Taiwan after 500 GB;
 https://developers.cloudflare.com/containers/pricing/). The pricing, FAQ and outbound-traffic pages do not say what

@@ -1,5 +1,7 @@
 # Progress reporting
 
+![The phases of a render and the percent each covers: planning 0 %, rendering 0 to 90 %, stitching 90 to 99 %, done 100 %; failed on a fatal error or a cancel](diagrams/job-workflow.svg)
+
 `GET /renders/<id>` (or `getRenderProgress()`) answers at any time:
 
 ```json

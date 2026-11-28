@@ -1,5 +1,7 @@
 # Failures and retries
 
+![Failure handling: every 1.5 s the coordinator polls every instance; a silent instance is replaced, a failed or late chunk is queued again, a damaged transfer is fetched or rendered again, a slow chunk gets a second run and the first to finish wins; every event is one JSON line in Workers Logs](diagrams/failure-handling.svg)
+
 Each row below happened on real Cloudflare Containers, in the private prototype this design comes from (93 jobs in a
 first round, then one-hour jobs on 100 to 290 instances). Each has a fix in `packages/core/src/coordinator.ts` and a
 unit test in `packages/core/test/coordinator.test.ts` that reproduces it against a simulated fleet.

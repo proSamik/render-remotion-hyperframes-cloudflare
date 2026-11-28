@@ -51,6 +51,7 @@ Worker's R2 binding (an outbound handler) instead of the public R2 endpoint: Clo
 those bytes as container egress byte for byte, so it does not save egress ([costs](docs/costs.md#container-egress)).
 Per-tier tables follow; resolution and smaller examples are further down in [Cost and speed](#cost-and-speed).
 
+![Where the money goes. Cloudflare: vCPU-seconds used, memory and disk while an instance runs (idle too), and container egress for every byte a container sends, to the Worker too, are billed; user downloads from R2 are free. AWS: Lambda GB-seconds billed, Lambda to S3 free, user downloads from S3 billed at $0.09 per GB](docs/diagrams/cost-flow.svg)
 
 
 ### A 1:44:00 project on four speed tiers
@@ -233,19 +234,9 @@ node packages/core/scripts/verify.mjs out/hello.mp4 --frames 1800
 
 ## How it works
 
-```mermaid
-flowchart TD
-    client["Your code, CLI or agent"] -->|"POST /renders (Bearer secret)"| worker["Worker"]
-    worker --> job["RenderJob Durable Object<br/>one per render<br/>plan, queue, deadlines, retries, progress"]
-    job -->|"alarm every 1.5 s: assign and poll"| c1["Container instance 1<br/>task server + 3 render processes"]
-    job --> c2["Container instance 2"]
-    job --> c3["Container instance N"]
-    c1 -->|"chunk .ts + .aac, SHA-256"| stitch["One instance joins<br/>combineChunks()"]
-    c2 --> stitch
-    c3 --> stitch
-    stitch --> out["Output<br/>streamed through the Worker, or stored in R2"]
-    client -->|"GET /renders/id (progress), GET /renders/id/output"| worker
-```
+![Architecture: your code calls the Worker with a bearer secret; the Worker hands each render to its own RenderJob Durable Object, which every 1.5 s assigns chunks to N container instances and polls them; instances upload chunks and the joined file to R2, from which you download without an egress fee](docs/diagrams/architecture.svg)
+
+![A render phase by phase: POST /renders, planning (0 %), rendering (0 to 90 %), stitching (90 to 99 %), done (100 %); a fatal error or POST /cancel ends in failed](docs/diagrams/job-workflow.svg)
 
 1. The Worker checks the secret and creates one Durable Object per render.
 2. That object asks a container for the composition's size, frame rate and length, and plans equal chunks.

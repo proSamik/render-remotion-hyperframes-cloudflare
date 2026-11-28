@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Diagrams (2026-11-28): architecture, a render phase by phase, Remotion chunking, the HyperFrames split, failure
+handling, and where the money goes beside AWS, as Excalidraw files (`docs/diagrams/*.excalidraw`, open them at
+excalidraw.com or in the VS Code extension to edit) with SVG exports (white background) in the README and the docs.
+Exported locally with Excalidraw's own `exportToSvg` in a headless browser, each checked by a screenshot.
+
 Split HyperFrames on Cloudflare, a shared plan, a determinism pre-flight (2026-11-28):
 
 - **Split HyperFrames ran on Cloudflare**: the 60 s example, 5:37 in one piece against 3:53 in 4 equal chunks on 4
