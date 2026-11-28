@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import type { Engine, Plan } from '../core/src/types.ts';
+import { describe, modeOf, preflight } from './preflight.ts';
 import { segmentsFromHtml } from './ranges.ts';
 import { ensureBrowser, loadDistributed, renderSplitChunk, renderSplitSingle, sizeFor, stitchSplit, type SplitOptions } from './split.ts';
 
@@ -36,6 +37,8 @@ export type HyperframesRenderOptions = {
   crf?: number;
   /** Split rendering only: longest gap between keyframes in seconds (default 2); every chunk also starts with one. */
   keyframeIntervalSeconds?: number;
+  /** Split rendering only: what to do when the determinism pre-flight finds something (preflight.ts). Default "warn": one piece. */
+  preflight?: 'warn' | 'off' | 'strict';
 };
 
 /** Split rendering applies: MP4 and not switched off. */
@@ -68,7 +71,15 @@ export function planOf(projectDir: string, options: HyperframesRenderOptions): P
   if (!Number.isInteger(plan.fps)) throw new Error('split rendering needs a whole-number frame rate; pass "split": false for 29.97 and the like');
   const size = sizeFor(plan.width, plan.height, options.resolution);
   const html = readFileSync(join(projectDir, 'index.html'), 'utf8');
-  return { ...plan, width: size.width, height: size.height, chunkable: true, chunkFiles: ['.ts', '.json'], variableChunks: true, segments: segmentsFromHtml(html, plan.fps, plan.durationInFrames) };
+  const mode = modeOf(options.preflight);
+  const findings = mode === 'off' ? [] : preflight(projectDir);
+  if (findings.length && mode === 'strict') throw new Error(`the composition may not render the same in chunks (preflight "strict"):\n${describe(findings).join('\n')}`);
+  if (findings.length) {
+    // One piece through the same split path: same encoder, same audio mix, no joins to get wrong.
+    return { ...plan, width: size.width, height: size.height, chunkable: false, chunkFiles: ['.ts', '.json'], sharedPlan: false,
+      warnings: [`rendered in one piece: the composition may not render the same in chunks (${findings.length} finding${findings.length > 1 ? 's' : ''}; set "preflight": "off" after \`npm run compare\` passes): ${describe(findings).slice(0, 8).join('; ')}`] };
+  }
+  return { ...plan, width: size.width, height: size.height, chunkable: true, chunkFiles: ['.ts', '.json'], variableChunks: true, sharedPlan: true, segments: segmentsFromHtml(html, plan.fps, plan.durationInFrames) };
 }
 
 /** The `hyperframes` CLI script in the node_modules of `cliFrom`. */

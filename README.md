@@ -52,6 +52,7 @@ those bytes as container egress byte for byte, so it does not save egress ([cost
 Per-tier tables follow; resolution and smaller examples are further down in [Cost and speed](#cost-and-speed).
 
 
+
 ### A 1:44:00 project on four speed tiers
 
 A 1:44:00 mixed test project (HyperFrames, Remotion, 3D, footage), 187,200 frames at 1920x1080 and 30 fps, rendered
@@ -138,7 +139,7 @@ Written and tested in November 2026 with Remotion 4.0.530, HyperFrames 0.9.103, 
 | Remotion: chunked over instances | tested (2) | tested (2) | tested (4 instances, 12 chunks) |
 | Remotion: still, web font, WebGL | tested | WebGL tested | tested |
 | HyperFrames (CLI, one piece) | tested | tested | tested |
-| HyperFrames split into chunks over instances | tested (up to 8 local instances; CI on Linux) | **not run** | **not run** |
+| HyperFrames split into chunks over instances | tested (up to 8 local instances; CI on Linux) | tested (the root service's image) | tested (4 instances, 60 s, 2026-11-28) |
 | Mixed | tested | tested | tested |
 | Chunks and output through R2 (Worker gateway) | | | tested |
 | Streaming join (`--stitch=stream`, `stream-fmp4`) | tested: same file as `combineChunks()` | | **not run** |
@@ -152,7 +153,8 @@ Details and everything that is not tested: [Limits and known problems](#limits-a
 **The Cloudflare column was measured with version 0.1.0.** The version after it changed the coordinator, the task
 server and the Worker (hedging rule, one set of files per run, checked transfers, streaming join: see the
 [changelog](CHANGELOG.md)). Those changes ran locally on macOS, with every example and 39 unit tests; CI
-runs the same checks on Linux. They have not been deployed to Cloudflare from this code base yet. The lessons behind them come from a private
+runs the same checks on Linux. Most of them have since run on Cloudflare too (2026-11-28: the setup and Deploy-button
+validations and the split HyperFrames measurement; see "Young code" below). The lessons behind them come from a private
 prototype of the same design that did run there, on up to 292 instances; where a number on these pages is the
 prototype's, the page says so.
 
@@ -306,10 +308,10 @@ This repository's small examples, cold start and join included:
 | HyperFrames example, 8 s | 1 | 17 s | $0.0011 |
 | Mixed example, 8 s | 2 | 35 s | $0.0027 |
 
-Split HyperFrames rendering has not run on Cloudflare yet. Locally, on one 8-core Mac with local processes as
-instances, the 60 s example went from 0:52 in one chunk to 0:32 in four (light content); with a canvas scene that
-fills the CPU by itself it went from 1:50 to 1:41, because four processes on one machine share the same cores. What it
-gains on separate instances is not measured: [docs/hyperframes-split.md](docs/hyperframes-split.md#measured).
+Split HyperFrames rendering on Cloudflare (2026-11-28): the 60 s example with a heavy glow scene took 5:37 in one
+piece and 3:53 in four equal chunks on four instances (1.45x; the two chunks holding the heavy scene set the pace),
+$0.021 against $0.038, the same 1800 frames and sound, SSIM 0.97 to 1.0 per frame:
+[docs/hyperframes-split.md](docs/hyperframes-split.md#measured-on-cloudflare).
 
 Heavier, real content, measured earlier on the same platform in the private prototype this design comes from
 (render only):
@@ -498,23 +500,24 @@ Honest list. Read it before you depend on this.
 
 - **Young code (state on 2026-11-28).** Which numbers come from which code:
   - **This repository's code** has run locally (Node and Docker), in CI on Linux, and on Cloudflare a few dozen
-    times on one account, with at most 4 instances per render (version 0.1.0; later versions not yet on
-    Cloudflare). The small-example tables in [Cost and speed](#cost-and-speed) are from this code.
+    times on one account, with at most 4 instances per render (version 0.1.0, and on 2026-11-28 the current code in
+    about a dozen validation renders). The small-example tables in [Cost and speed](#cost-and-speed) are from this code.
   - **A private implementation of the same design** (its own code) produced the larger numbers: the 1:44:00 mixed
     project on four speed tiers and at 360p to 4K, up to 292 instances per job, 7 of 7 failure drills (instance
     killed, cancel, upload resume, token expiry, two users' isolation, failing webhook, corrupted chunk), two users
     rendering at once, about 100 jobs on 2026-11-27 and 28, and the container-egress test of
     [docs/costs.md](docs/costs.md#container-egress). Tables from it say so.
-- **The newest changes have not been on Cloudflare.** The measured hedging, the per-run file names, the checked
-  downloads, the streaming join, direct transfer over presigned URLs and the self-test hook ran on one Mac, against
-  stand-ins, and are checked by CI. The examples on Cloudflare ran with the version before.
+- **Part of the newest code has been on Cloudflare.** On 2026-11-28 the current coordinator, Worker and engines ran
+  there in the validations of [docs/setup.md](docs/setup.md) and [docs/deploy.md](docs/deploy.md): per-run file
+  names, checked transfers through the R2 gateway, hedging (it started on a slow chunk), split HyperFrames, the shared
+  plan, the HTTP API. Still only against stand-ins: the streaming join, direct transfer over presigned URLs, the
+  self-test hook.
 - **Cloudflare's API is moving.** This uses the Durable Object Container API with the `durable_object` scheduling
   policy, which Cloudflare calls a public beta. The `Container` class from `@cloudflare/containers`, which most
   existing examples use, is called deprecated in Cloudflare's docs as of November 2026.
 - **Not run:** presigned URLs against R2; `wrangler deploy` building the image on the same machine; outputs above
   100 MiB (the multipart upload ran only with its threshold lowered to 8 MiB); more than 4 instances; videos longer
-  than 90 seconds; the streaming join on anything longer than 90 frames; HyperFrames as the host of a mix; split
-HyperFrames rendering on Cloudflare or in Docker; Google
+  than 90 seconds; the streaming join on anything longer than 90 frames; HyperFrames as the host of a mix; Google
   Fonts loaded by Remotion at render time; `https://` serve URLs.
 - **Helpers that nothing here uses yet.** The multi-user signing policy, the client-side multipart upload, the range
   proxy and the planner in `packages/core` are unit-tested and documented as patterns
@@ -526,10 +529,10 @@ HyperFrames rendering on Cloudflare or in Docker; Google
 - **One cost class.** Every chunk runs with the same number of processes per instance. Content that fills an
   instance alone (a heavy shader) should not share one; the service does not know which chunks those are.
 - **Only H.264 is chunked.** For HyperFrames that means MP4; WebM, MOV and the other formats render in one piece.
-- **Split HyperFrames rendering has run on one Mac and in CI, not on Cloudflare and not in Docker.** Every instance
-  plans the composition itself (2 to 3 s for the examples); a shared plan in R2 is not built. The composition must be
-  deterministic: time from the timeline, seeded randomness, fonts in the project
-  ([docs/hyperframes-split.md](docs/hyperframes-split.md)).
+- **Split HyperFrames rendering ran on Cloudflare once** (one example, 4 instances). With R2 the plan is made once
+  and shared; when all instances start together that saves CPU, not time. The composition must be deterministic:
+  time from the timeline, seeded randomness, fonts and scripts in the project; a pre-flight renders in one piece when
+  it finds a clock, `Math.random()` or a network load ([docs/hyperframes-split.md](docs/hyperframes-split.md)).
 - **Without R2 the output lives on one instance** for at most 15 minutes after the render.
 - **The default join needs chunks and output on one disk.** About 85 minutes of 1080p by the prototype's measurement.
   Longer needs `--stitch=stream` or `stream-fmp4`, which have not run on Cloudflare here.

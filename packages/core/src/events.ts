@@ -12,7 +12,7 @@ export type EventLevel = 'info' | 'warning' | 'error';
 /** `info`: part of normal work. `warning`: recovered, worth counting. `error`: the render or a file was at risk. */
 export const EVENT_LEVELS: Record<EventKind, EventLevel> = {
   hedge_started: 'info', hedge_won: 'info', job_cancelled: 'info',
-  plan_error: 'warning', instance_start_failed: 'warning', instance_unresponsive: 'warning', instance_restarted: 'warning',
+  plan_error: 'warning', plan_warning: 'warning', instance_start_failed: 'warning', instance_unresponsive: 'warning', instance_restarted: 'warning',
   chunk_failed: 'warning', chunk_deadline: 'warning', chunk_hung: 'warning', transfer_error: 'warning', coordinator_error: 'warning',
   checksum_mismatch: 'error', stitch_error: 'error', job_failed: 'error',
 };

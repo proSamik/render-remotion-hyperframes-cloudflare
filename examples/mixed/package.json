@@ -5,7 +5,7 @@
   "type": "module",
   "description": "A Remotion composition with a HyperFrames-made layer: the layer is pre-rendered to a video with alpha, then composited by Remotion.",
   "scripts": {
-    "assets": "node ../../packages/core/scripts/make-tone.mjs public/tone.wav 8",
+    "assets": "node ../../packages/core/scripts/make-tone.mjs public/tone.wav 8 && node ../../packages/hyperframes-engine/scripts/vendor-scripts.mjs hyperframes-layer",
     "layer": "node ../../packages/core/bin/with-typescript-run.mjs prerender-layer.ts public",
     "site": "npm run assets && npm run layer && node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs sites create src/index.ts --site-name=site",
     "studio": "npm run assets && npm run layer && remotion studio src/index.ts",

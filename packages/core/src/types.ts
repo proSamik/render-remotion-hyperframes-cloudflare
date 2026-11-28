@@ -25,6 +25,24 @@ export type Plan = {
   variableChunks?: boolean;
   /** Frame ranges and what a frame there costs to render (planner.ts), as far as the engine can tell without a browser. */
   segments?: Segment[];
+  /**
+   * true: every render process needs a preparation that is the same on every instance and worth sharing through
+   * storage (HyperFrames' plan: compile, fonts, media probes, audio mix). With storage the coordinator then gives every
+   * task `sharedPlan`: the first instance makes it and uploads it, the others fetch it instead of making it again.
+   */
+  sharedPlan?: boolean;
+  /** Things the engine noticed while planning that the user should know (recorded as `plan_warning`, not fatal). */
+  warnings?: string[];
+};
+
+/** Where the shared preparation of a job lives (see Plan.sharedPlan). Two objects: the archive, then its receipt. */
+export type SharedPlanUrls = {
+  /** 'make': prepare and upload. 'fetch': wait for the receipt, download, check; prepare locally if it does not come. */
+  role: 'make' | 'fetch';
+  archiveGet: string;
+  archivePut: string;
+  receiptGet: string;
+  receiptPut: string;
 };
 
 /** Engine options. Passed through untouched by the coordinator. */
@@ -113,6 +131,8 @@ export type TaskRequest = {
   upload?: Record<string, string>;
   /** R2 mode, stitch: presigned GET URL per chunk file name. */
   download?: Record<string, string>;
+  /** With storage and Plan.sharedPlan: where the job's shared preparation is. */
+  sharedPlan?: SharedPlanUrls;
 };
 
 export type TaskStatus = {
@@ -199,7 +219,7 @@ export type InstanceState = {
 
 /** What happened, as a fixed word: stable enough to group by in an error tracker (see events.ts). */
 export type EventKind =
-  | 'plan_error' | 'instance_start_failed' | 'instance_unresponsive' | 'instance_restarted'
+  | 'plan_error' | 'plan_warning' | 'instance_start_failed' | 'instance_unresponsive' | 'instance_restarted'
   | 'chunk_failed' | 'chunk_deadline' | 'chunk_hung' | 'checksum_mismatch' | 'transfer_error' | 'stitch_error'
   | 'hedge_started' | 'hedge_won' | 'coordinator_error' | 'job_failed' | 'job_cancelled';
 

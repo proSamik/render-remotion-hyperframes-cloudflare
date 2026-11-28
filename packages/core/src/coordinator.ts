@@ -129,6 +129,20 @@ export async function step(job: JobState, fleet: Fleet, storage: Storage | null 
   return job;
 }
 
+/**
+ * The URLs of the job's shared preparation (Plan.sharedPlan). The first instance of the job makes it: it is the one that
+ * answered the plan request, so it is warm while the others still start, and its upload is usually there before they
+ * ask. Everybody else fetches.
+ */
+async function sharedPlanOf(job: JobState, storage: Storage, instance: string): Promise<NonNullable<TaskRequest['sharedPlan']>> {
+  const key = (name: string) => objectKey(job.id, `shared-plan.${name}`);
+  return {
+    role: instance === job.instances[0]?.name ? 'make' : 'fetch',
+    archiveGet: await storage.presignGet(key('tar')), archivePut: await storage.presignPut(key('tar')),
+    receiptGet: await storage.presignGet(key('json')), receiptPut: await storage.presignPut(key('json')),
+  };
+}
+
 async function planning(job: JobState, fleet: Fleet, now: number) {
   const instance = live(job)[0] ?? addInstance(job, now);
   if (now - job.createdAt > START_DEADLINE_MS) return fail(job, 'no instance answered within 15 minutes', now);
@@ -155,6 +169,7 @@ async function planning(job: JobState, fleet: Fleet, now: number) {
   const still = render.type === 'still';
   const range = still ? [Number(render.frame ?? 0), Number(render.frame ?? 0)] : render.frameRange ?? [0, plan.durationInFrames - 1];
   job.plan = plan;
+  for (const warning of plan.warnings ?? []) note(job, 'plan_warning', warning);
   job.startFrame = Math.max(0, Math.min(plan.durationInFrames - 1, range[0]!));
   job.endFrame = Math.max(job.startFrame + 1, Math.min(plan.durationInFrames, range[1]! + 1));
   const ranges = chunkRanges(plan, job.startFrame, job.endFrame, job.request.fleet ?? {}, config.instances * config.processes);
@@ -304,6 +319,7 @@ async function rendering(job: JobState, fleet: Fleet, storage: Storage | null, n
       id: taskId, jobId: job.id, kind: job.request.render.type === 'still' ? 'still' : job.single ? 'single' : 'chunk', render: job.request.render, plan,
       startFrame: chunk.startFrame, endFrame: chunk.endFrame, compositionStart: job.startFrame, chunkIndex: chunk.index, processes: config.processes, run,
       ...(base ? { outputBase: base } : {}), ...(storage ? { upload } : {}),
+      ...(storage && plan.sharedPlan && !job.single ? { sharedPlan: await sharedPlanOf(job, storage, instance.name) } : {}),
     };
     try {
       const response = await call(fleet, instance.name, '/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(task) });
@@ -433,6 +449,8 @@ async function stitching(job: JobState, fleet: Fleet, storage: Storage | null, n
     const task: TaskRequest = {
       id, jobId: job.id, kind: 'stitch', render: job.request.render, plan: job.plan!, startFrame: job.startFrame, endFrame: job.endFrame, framesPerChunk: job.framesPerChunk, chunkCount: job.chunks.length,
       chunks: job.chunks.map((chunk) => ({ index: chunk.index, files: chunk.files!, startFrame: chunk.startFrame, endFrame: chunk.endFrame })), stitch: settings(job).stitch, ...(storage ? { download, upload } : {}),
+      // The stitcher needs the plan too (HyperFrames: the audio mix). It never makes it: it fetches, or has it already.
+      ...(storage && job.plan!.sharedPlan ? { sharedPlan: { ...(await sharedPlanOf(job, storage, stitcher.name)), role: 'fetch' as const } } : {}),
     };
     try {
       const response = await call(fleet, stitcher.name, '/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(task) });

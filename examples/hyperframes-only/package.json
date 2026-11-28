@@ -9,9 +9,9 @@
     "hyperframes": "0.9.103"
   },
   "scripts": {
-    "assets": "node ../../packages/core/scripts/make-tone.mjs composition/assets/tone.wav 8 && node ../../packages/core/scripts/make-tone.mjs long/assets/tone.wav 60",
-    "check": "cd composition && hyperframes check && cd ../long && hyperframes check",
-    "preview": "cd composition && hyperframes preview",
+    "assets": "node ../../packages/core/scripts/make-tone.mjs composition/assets/tone.wav 8 && node ../../packages/core/scripts/make-tone.mjs long/assets/tone.wav 60 && node ../../packages/hyperframes-engine/scripts/vendor-scripts.mjs composition && node ../../packages/hyperframes-engine/scripts/vendor-scripts.mjs long",
+    "check": "npm run assets && cd composition && hyperframes check && cd ../long && hyperframes check",
+    "preview": "npm run assets && cd composition && hyperframes preview",
     "local": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/render.mjs local --engine=../../packages/hyperframes-engine/engine.ts --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/local.mp4",
     "local:cli": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/render.mjs local --engine=../../packages/hyperframes-engine/engine.ts --render='{\"project\":\"composition\",\"quality\":\"draft\",\"split\":false}' --out=out/local-cli.mp4",
     "local:long": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/render.mjs local --engine=../../packages/hyperframes-engine/engine.ts --render='{\"project\":\"long\",\"quality\":\"draft\"}' --chunks auto --instances 2 --processes-per-instance 2 --out=out/long.mp4",

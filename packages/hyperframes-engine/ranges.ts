@@ -67,6 +67,8 @@ export type ChunkMeta = {
   /** GOP length in frames inside a part (a keyframe at least this often); every part starts with a keyframe. */
   gop: number;
   renderSeconds?: number;
+  /** How the instance got HyperFrames' plan for this chunk: planned itself, or fetched the shared copy; and how long it took. */
+  plan?: { source: 'local' | 'shared'; seconds: number };
 };
 
 /** Everything that would make the joined file wrong, as sentences. Empty: the chunks can be joined. */

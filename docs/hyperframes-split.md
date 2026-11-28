@@ -129,17 +129,74 @@ has to play along:
   `<canvas>` with a web font: a canvas draws with whatever font is loaded at that moment, which differs between a
   chunk that starts in that scene and one that runs into it. Keep text in the DOM.
 - **Media in the project, or at a URL every instance can reach.** The plan probes and, for video, extracts frames.
-- **Scripts from a CDN are fetched by every chunk.** The examples load GSAP from jsDelivr, like `hyperframes init`
-  does. That is not inlined into the plan: each chunk's browser loads it again. During one local run the machine's
-  network dropped for a moment, every chunk failed with `sub_timeline_script_failure ... ERR_INTERNET_DISCONNECTED`,
-  and the job failed after its retries. For a service, put the script files in the project and load them by relative
-  path.
+- **Scripts in the project, not from a CDN.** A script loaded from a CDN is fetched again by every chunk's browser.
+  During one local run the machine's network dropped for a moment, every chunk failed with
+  `sub_timeline_script_failure ... ERR_INTERNET_DISCONNECTED`, and the job failed after its retries; and a CDN may
+  serve another version to another machine. `packages/hyperframes-engine/scripts/vendor-scripts.mjs <project>
+  --rewrite` downloads every `<script src="https://...">` into `assets/vendor/`, points `index.html` at the copy and
+  writes `vendor.lock.json` (URL and SHA-256 per file). Without `--rewrite` it fetches what the lock lists and refuses
+  a file whose hash changed: the examples run it in `npm run assets`, before every local render, check and image
+  build. Commit `index.html` and `vendor.lock.json`, not `assets/vendor/`. GSAP has its own licence
+  (https://gsap.com/standard-license).
 - **A whole-number frame rate** (24, 25, 30, 50, 60). 29.97 renders with `"split": false`.
 - **`data-duration` on the root element equal to the timeline's length.** The coordinator plans from it. If
   HyperFrames' plan has fewer frames, the chunk or the join fails with a message that says so.
 
 How to check your own composition: `npm run compare` renders it once in one chunk and once in several and compares
 every frame (below).
+
+## Determinism pre-flight
+
+Before a split render the engine reads the project (no browser): `index.html`, and the local scripts and stylesheets
+it names (`packages/hyperframes-engine/preflight.ts`). It flags
+
+| Finding | Why it breaks a split render |
+| --- | --- |
+| `Date.now()`, `performance.now()`, `new Date()` with no argument | wall-clock time: each chunk starts at another moment |
+| `Math.random()` | another sequence in every browser; use a seeded generator (the 60 s example uses mulberry32) |
+| `<script src>`, `<link href>`, `@import` or `url()` over http(s) | another machine may get another version, or nothing |
+
+Comments do not count, and libraries listed in `vendor.lock.json` are not read (GSAP reads the clock for its own
+ticker; HyperFrames drives its timeline from virtual time). What it does with a finding is the render option
+`preflight`:
+
+| `preflight` | With a finding |
+| --- | --- |
+| `"warn"` (default) | renders **in one piece** through the same engine (same encoder, same audio mix, no joins) and records a `plan_warning` in the progress's `errors` (not fatal) with each finding: file, line, text |
+| `"off"` | splits anyway. Use it after `npm run compare` passed for this composition |
+| `"strict"` | refuses the render (`422`, the findings in the message) |
+
+It is a pattern match, not proof: a match inside a string is a false alarm, and state carried from one frame to the
+next in a closure is not found at all. `npm run compare` (one chunk against several, SSIM of every frame) remains
+the proof; a double render of only the frames around each join would be a cheaper proof and is not built.
+
+## Shared plan in R2
+
+With a bucket attached, HyperFrames' plan is made once per render and the other instances fetch it:
+
+1. The coordinator gives every chunk task (and the join) two pairs of URLs: `renders/<id>/shared-plan.tar` and its
+   receipt `shared-plan.json`. The first instance of the render (the one that answered the plan request, so it is
+   warm while the others still start) has the role `make`, every other one `fetch`.
+2. `make`: plans as before, packs the plan, the assembler files and the description into one tar, uploads it, then
+   the receipt (key, HyperFrames' plan hash, size, SHA-256). The receipt comes last, so a receipt means a complete
+   archive.
+3. `fetch`: waits for the receipt (up to 60 s, `HF_SHARED_PLAN_WAIT_MS`), downloads the archive checked by size and
+   SHA-256, unpacks it, and uses it only when the receipt's key (hash of project folder and render configuration)
+   is its own and the unpacked plan hash equals the receipt's. Anything else, or no receipt in time: it plans
+   itself, as before.
+4. The plan hash check at the join is unchanged: every chunk still carries the hash of the plan it was rendered with.
+
+Every chunk's description says how its instance got the plan and how long that took (`"plan": { "source": "local" |
+"shared", "seconds": ... }`), so the saving can be read from the chunk files. 
+
+Measured on Cloudflare (2026-11-28, `standard-4`, the 60 s example in 4 chunks on 4 instances, all started at once):
+the first instance planned in 6.9 s; the other three waited 10.9 to 11.1 s each for the receipt and fetched the plan
+instead of planning. So when every instance starts at the same moment, sharing **saves CPU, not time**: three
+instances did not compile, probe and mix the audio again (3 x about 7 s of planning), but they spent that time
+waiting. It pays off in wall time when instances start later than the first (a fleet that grows, a replacement
+instance, a retry) and for projects whose plan is expensive (long videos to probe and extract), where planning
+once instead of N times also stops N instances from downloading the same media. With one worker per process (before
+the fix below) planning took 17.5 s and the others waited 22.8 to 23.9 s.
 
 ## Heavy ranges: shorter chunks where frames cost more
 
@@ -261,7 +318,7 @@ Reading:
   already keeps several cores busy (Chrome rasterizes the canvas in software, FFmpeg encodes beside it); four
   processes on the same 8 cores mostly wait for each other. Light content went 1.6x faster with 4 processes, heavy
   content 1.09x. The point of splitting is that every chunk gets its own instance with its own 4 vCPU on Cloudflare,
-  which this Mac cannot simulate. That has not been measured here.
+  which this Mac cannot simulate. On Cloudflare it was 1.45x with 4 equal chunks: [Measured on Cloudflare](#measured-on-cloudflare).
 - **Fixed cost per chunk: about 4 to 7 s** on this Mac (plan 2.5 s once per instance, browser start, the rewrap, the
   join's share). It is why the 8 s example is not faster split (0:11 either way) and why chunks under a few seconds
   do not pay.
@@ -272,15 +329,44 @@ Reading:
   on a Mac with a GPU, Chrome's faster capture path. In a container there is no GPU, and the split path uses the
   same software GL as HyperFrames' own Lambda and Cloud Run renderers.
 
+## Measured on Cloudflare
+
+2026-11-28, `standard-4`, the service of the repository root (docs/deploy.md: the image with all three engines, built
+from `deploy/Dockerfile`, HyperFrames 0.9.103), R2 attached, the image already at the location. The 60 s example
+(`long/`, 1800 frames, a glow scene from 20 s to 40 s that costs about 4 times a DOM frame), quality `standard`, one
+process per instance. Durations m:ss, from the request to `done` (download not included).
+
+| Run | Wall time | Chunk render times | Estimated cost | Output |
+| --- | --- | --- | --- | --- |
+| 1 piece on 1 instance (`chunks: 1`) | 5:37 | 5:34 | $0.021 | 1800 frames, 60.00 s, 194 MB |
+| 4 equal chunks on 4 instances | 3:53 | 0:39, 2:32, 2:43, 0:47 (plus a hedge of a slow chunk) | $0.038 | 1800 frames, 60.00 s, 194 MB |
+
+- **Speed-up 1.45x with 4 instances**, far from 4x: equal chunks put the glow scene into two of them, which took 4
+  times as long as the others, and the job waits for the slowest. That is exactly what `--chunks auto` with
+  `data-render-cost="heavy"` is for (shorter chunks over heavy ranges); this run used equal chunks on purpose, to
+  compare with the local numbers.
+- **Cost 1.8x** for the split: four instances started, each planned or waited for the plan, three sat idle while the
+  two heavy chunks finished, and a hedge ran a slow chunk a second time.
+- **The same video.** Frames 1800 against 1800, both 60.00 s; 60 of 60 beeps in both, no click or gap at the joins
+  (`verify.mjs --joins 450,900,1350 --tone`). SSIM of every frame of the split render against the one-piece render:
+  mean 0.9935; at the joins 0.9998 (frame 450), 0.978 (frame 900, inside the glow scene), 0.9985 (frame 1350); the
+  lowest 0.972, at frame 810, inside the glow scene and not at a join. Thousands of blurred dots are the worst case
+  for an encoder and the two renders put their keyframes on different frames; the local lossless comparison above is
+  the proof that the captured pixels are the same.
+- **Found and fixed while measuring**: with one process per instance the distributed renderer captured with a
+  single browser and a 4 vCPU instance used about 1 vCPU (Cloudflare's usage showed 0.8 vCPU per instance). The
+  engine now gives each process `CPUs / processes` capture browsers also when there is one process. Before the fix
+  the same 4-chunk job (at quality `high`, CRF 12) took 12:33 and two heavy chunks passed the 300 s deadline twice.
+  Also fixed: a split render scaled below the composition's size (`resolution: "480p"`) failed its own duration
+  check by 2 frames, because the re-encode used B-frames; it encodes without them now.
+
 ## Limits
 
-- **Not run on Cloudflare, not run in Docker.** It ran on macOS, and CI runs the example on Linux (Ubuntu, no
-  Docker). The Dockerfile installs the extra package and copies the second project, but that image was not built for
-  this change.
-- **Every instance plans.** `planV2()` compiles the project, probes media and mixes the audio on every instance that
-  renders a chunk (2 to 3 s for the examples). A project with long videos would extract frames on every instance.
-  HyperFrames' Plan v2 is content-addressed and can be published once to object storage
-  (`planV2WithPublisher()`) and fetched per chunk; wiring that to R2 is the next step and is not built.
+- **Measured on Cloudflare once** (the table above), with one example. Docker: the image of the repository root ran
+  it; the `examples/hyperframes-only` image was built but not deployed (the same engine and code).
+- **Without R2 every instance plans.** `planV2()` compiles the project, probes media and mixes the audio (2 to 3 s
+  for the examples; a project with long videos extracts frames). With R2 the plan is made once and shared
+  ([Shared plan](#shared-plan-in-r2)); without storage each instance plans for itself.
 - **The plan hash check is only as good as the inputs.** It catches instances that compiled different projects,
   variables or fonts. It does not catch a composition that reads the clock.
 - **The default chunk deadline assumes at least 1.5 fps** (`max(300 s, frames / 1.5)`, from the Remotion path). A

@@ -125,7 +125,10 @@ Compare the SHA-256 of the download with `outputSha256` from the progress.
   three and fails when the frames at the joins differ. A split render needs every pixel to be a function of timeline
   time: no `Date.now()`, no state carried from frame to frame, seeded randomness, fonts as files in the project, text
   not drawn into a `<canvas>` with a web font ([docs/hyperframes-split.md](docs/hyperframes-split.md)). Mark heavy
-  scenes with `data-render-cost="heavy"` so `--chunks auto` cuts them shorter.
+  scenes with `data-render-cost="heavy"` so `--chunks auto` cuts them shorter. Take CDN scripts into the project:
+  `node packages/hyperframes-engine/scripts/vendor-scripts.mjs <project> --rewrite`. A pre-flight flags `Date.now()`,
+  `performance.now()`, `new Date()`, `Math.random()` and network loads and then renders in one piece with a
+  `plan_warning`; after `npm run compare` passes, `"preflight": "off"` in `render` splits anyway.
 - Fonts: the container has no Mac or Windows fonts. Put font files in the project. See [docs/fonts.md](docs/fonts.md).
 - Media: files under `public/` (Remotion) or `assets/` (HyperFrames) go into the image. Remote media must be
   reachable from the container over https.

@@ -26,7 +26,8 @@ import type { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { outputSize } from '../core/src/resolution.ts';
-import type { ChunkFeed, StreamOutput, TaskRequest } from '../core/src/types.ts';
+import { downloadVerified, hashFile, putFile } from '../core/src/transfer.ts';
+import type { ChunkFeed, SharedPlanUrls, StreamOutput, TaskRequest } from '../core/src/types.ts';
 import { audioPlan, checkChunks, distributedQuality, partsOf, SLICE_FRAMES, tsOffsetSeconds, type ChunkMeta, type Slice } from './ranges.ts';
 
 /** The part of `@hyperframes/producer/distributed` used here (its own types are richer; this keeps the root type check independent of the example's node_modules). */
@@ -109,13 +110,58 @@ const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-export type LocalPlan = { planDir: string; planHash: string; totalFrames: number; slices: Slice[]; audioPath: string | null };
+export type LocalPlan = {
+  planDir: string; planHash: string; totalFrames: number; slices: Slice[]; audioPath: string | null;
+  /** How this instance got it, and how long that took: planned here, or fetched from the shared copy. */
+  source?: 'local' | 'shared'; seconds?: number;
+};
+
+/** The receipt of a shared plan: written after the archive, so a receipt means the archive is complete. */
+type SharedReceipt = { key: string; planHash: string; bytes: number; sha256: string; planSeconds: number };
+
+const SHARED_WAIT_MS = Number(process.env.HF_SHARED_PLAN_WAIT_MS ?? 60_000);
+
+/** Fetches the shared plan into `jobDir` and answers true, or false when there is none (yet) or it is not ours. */
+async function fetchSharedPlan(shared: SharedPlanUrls, jobDir: string, key: string): Promise<boolean> {
+  const until = Date.now() + SHARED_WAIT_MS;
+  let receipt: SharedReceipt | null = null;
+  while (!receipt && Date.now() < until) {
+    const response = await fetch(shared.receiptGet).catch(() => null);
+    if (response?.ok) receipt = (await response.json().catch(() => null)) as SharedReceipt | null;
+    else { await response?.body?.cancel(); await sleep(1000); }
+  }
+  // A plan for another project or configuration is never used: the key is the hash of both.
+  if (!receipt || receipt.key !== key) return false;
+  const archive = join(jobDir, `shared-plan-${process.pid}.tar`);
+  try {
+    await downloadVerified(shared.archiveGet, archive, { bytes: receipt.bytes, sha256: receipt.sha256 });
+    await run('tar', ['-xf', archive, '-C', jobDir]);
+    const described = JSON.parse(await readFile(join(jobDir, `hf-plan-${key}.json`), 'utf8')) as LocalPlan;
+    return described.planHash === receipt.planHash;
+  } catch { return false; }
+  finally { await rm(archive, { force: true }); }
+}
+
+/** Packs the plan (plan, assembler files, description) and uploads it, then the receipt. Failures only cost the sharing. */
+async function publishSharedPlan(shared: SharedPlanUrls, jobDir: string, key: string, plan: LocalPlan): Promise<void> {
+  const archive = join(jobDir, `shared-plan-${process.pid}.tar`);
+  try {
+    await run('tar', ['-cf', archive, '-C', jobDir, `hf-plan-${key}`, `hf-plan-${key}-assembler`, `hf-plan-${key}.json`]);
+    const file = await hashFile(archive, 'shared-plan.tar');
+    await putFile(shared.archivePut, archive, file);
+    const receipt: SharedReceipt = { key, planHash: plan.planHash, bytes: file.bytes, sha256: file.sha256, planSeconds: plan.seconds ?? 0 };
+    const body = JSON.stringify(receipt);
+    const response = await fetch(shared.receiptPut, { method: 'PUT', body, headers: { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) } });
+    await response.body?.cancel();
+  } catch (error) { console.error(`shared plan not published: ${error instanceof Error ? error.message : error}`); }
+  finally { await rm(archive, { force: true }); }
+}
 
 /**
  * The job's plan on this instance: made once, by whichever process asks first; the others wait for it. It lives in the
  * job's folder, so it goes when the job's files are deleted, and an edited project is planned again by the next job.
  */
-export async function ensurePlan(api: Distributed, input: { jobDir: string; projectDir: string; config: Record<string, unknown>; prepare?: () => Promise<void> }): Promise<LocalPlan> {
+export async function ensurePlan(api: Distributed, input: { jobDir: string; projectDir: string; config: Record<string, unknown>; prepare?: () => Promise<void>; shared?: SharedPlanUrls }): Promise<LocalPlan> {
   const key = sha256(JSON.stringify({ projectDir: input.projectDir, config: input.config })).slice(0, 16);
   const planDir = join(input.jobDir, `hf-plan-${key}`);
   const assemblerDir = `${planDir}-assembler`;
@@ -136,6 +182,13 @@ export async function ensurePlan(api: Distributed, input: { jobDir: string; proj
     try {
       await writeFile(join(lock, 'pid'), String(process.pid));
       if (existsSync(ready)) break;
+      const began = Date.now();
+      // Shared through storage: fetched when another instance made it, so this one does not plan the same thing again.
+      if (input.shared?.role === 'fetch' && (await fetchSharedPlan(input.shared, input.jobDir, key))) {
+        const fetched = JSON.parse(await readFile(ready, 'utf8')) as LocalPlan;
+        await writeFile(ready, JSON.stringify({ ...fetched, source: 'shared', seconds: (Date.now() - began) / 1000 }));
+        break;
+      }
       await input.prepare?.();
       const staging = `${planDir}.${process.pid}`;
       await rm(staging, { recursive: true, force: true });
@@ -146,9 +199,10 @@ export async function ensurePlan(api: Distributed, input: { jobDir: string; proj
       await rm(assemblerDir, { recursive: true, force: true });
       const assembler = api.materializePlanV2Target(planDir, { role: 'assembler' }, assemblerDir);
       const slices = JSON.parse(await readFile(join(assembler.planDir, 'meta', 'chunks.json'), 'utf8')) as Slice[];
-      const description: LocalPlan = { planDir, planHash: result.sourcePlanV1Hash, totalFrames: result.totalFrames, slices: slices.map(({ index, startFrame, endFrame }) => ({ index, startFrame, endFrame })), audioPath: assembler.audioPath };
+      const description: LocalPlan = { planDir, planHash: result.sourcePlanV1Hash, totalFrames: result.totalFrames, slices: slices.map(({ index, startFrame, endFrame }) => ({ index, startFrame, endFrame })), audioPath: assembler.audioPath, source: 'local', seconds: (Date.now() - began) / 1000 };
       await writeFile(`${ready}.tmp`, JSON.stringify(description));
       await rename(`${ready}.tmp`, ready);
+      if (input.shared?.role === 'make') await publishSharedPlan(input.shared, input.jobDir, key, description);
     } finally {
       await rm(lock, { recursive: true, force: true });
     }
@@ -190,7 +244,9 @@ function capturedFrames(partPath: string): number {
 function applyWorkers(options: SplitOptions, processes: number | undefined) {
   Object.assign(process.env, ENV);
   if (options.workers === 'auto') return;
-  const workers = typeof options.workers === 'number' ? options.workers : (processes ?? 1) > 1 ? Math.max(1, Math.floor(cpus().length / processes!)) : null;
+  // Also with one process per instance: left to itself the distributed renderer captured with one browser, and a
+  // heavy chunk on a 4 vCPU instance used about 1 vCPU (measured on Cloudflare, 2026-11-28).
+  const workers = typeof options.workers === 'number' ? options.workers : Math.max(1, Math.floor(cpus().length / (processes ?? 1)));
   if (workers) process.env.PRODUCER_MAX_WORKERS = String(workers);
 }
 
@@ -200,7 +256,7 @@ export async function renderSplitChunk(input: { api: Distributed; prepare?: () =
   const started = Date.now();
   applyWorkers(options, task.processes);
   const config = planConfig(input.composition, options);
-  const plan = await ensurePlan(api, { jobDir: dir, projectDir: input.projectDir, config, ...(input.prepare ? { prepare: input.prepare } : {}) });
+  const plan = await ensurePlan(api, { jobDir: dir, projectDir: input.projectDir, config, ...(input.prepare ? { prepare: input.prepare } : {}), ...(task.sharedPlan ? { shared: task.sharedPlan } : {}) });
   const startFrame = task.startFrame ?? 0;
   const endFrame = task.endFrame ?? plan.totalFrames;
   const parts = partsOf(plan.slices, startFrame, endFrame);
@@ -224,7 +280,7 @@ export async function renderSplitChunk(input: { api: Distributed; prepare?: () =
     const tsPath = join(dir, `${base}.part${index}.ts`);
     const offset = ['-output_ts_offset', String(tsOffsetSeconds(part.startFrame, fps))];
     const codec = size.downscale
-      ? ['-vf', `scale=${size.width}:${size.height}:flags=lanczos`, '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-b:v', String(size.bitrate), '-maxrate', String(size.bitrate), '-bufsize', String(2 * size.bitrate), '-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0', '-flags', '+cgop', '-force_key_frames', 'expr:eq(n,0)']
+      ? ['-vf', `scale=${size.width}:${size.height}:flags=lanczos`, '-c:v', 'libx264', '-preset', 'veryfast', '-bf', '0', '-pix_fmt', 'yuv420p', '-b:v', String(size.bitrate), '-maxrate', String(size.bitrate), '-bufsize', String(2 * size.bitrate), '-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0', '-flags', '+cgop', '-force_key_frames', 'expr:eq(n,0)']
       : ['-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb'];
     await run('ffmpeg', ['-hide_banner', '-nostdin', '-v', 'error', '-y', '-i', partPath, '-map', '0:v:0', ...codec, ...offset, '-f', 'mpegts', tsPath]);
     const probed = await probeVideo(tsPath);
@@ -242,6 +298,7 @@ export async function renderSplitChunk(input: { api: Distributed; prepare?: () =
   const meta: ChunkMeta = {
     version: 1, planHash: plan.planHash, fps, width: size.width, height: size.height, startFrame, endFrame, frames: done, parts, gop,
     video: { name: video, bytes: (await stat(videoPath)).size, sha256: hash.digest('hex') }, renderSeconds: (Date.now() - started) / 1000,
+    ...(plan.source ? { plan: { source: plan.source, seconds: plan.seconds ?? 0 } } : {}),
   };
   await writeFile(join(dir, `${base}.json`), JSON.stringify(meta, null, 2));
   return [video, `${base}.json`];
@@ -259,7 +316,7 @@ export async function stitchSplit(input: { api: Distributed; prepare?: () => Pro
   const { api, task, dir, options, feed } = input;
   Object.assign(process.env, ENV);
   const config = planConfig(input.composition, options);
-  const plan = await ensurePlan(api, { jobDir: dir, projectDir: input.projectDir, config, ...(input.prepare ? { prepare: input.prepare } : {}) });
+  const plan = await ensurePlan(api, { jobDir: dir, projectDir: input.projectDir, config, ...(input.prepare ? { prepare: input.prepare } : {}), ...(task.sharedPlan ? { shared: task.sharedPlan } : {}) });
   const size = sizeFor(input.composition.width, input.composition.height, options.resolution);
   const fps = input.composition.fps;
   const chunks = [...(task.chunks ?? [])].sort((a, b) => a.index - b.index);

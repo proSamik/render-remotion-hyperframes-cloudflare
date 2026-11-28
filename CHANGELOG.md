@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+Split HyperFrames on Cloudflare, a shared plan, a determinism pre-flight (2026-11-28):
+
+- **Split HyperFrames ran on Cloudflare**: the 60 s example, 5:37 in one piece against 3:53 in 4 equal chunks on 4
+  instances ($0.021 against $0.038 estimated), same frames and sound, SSIM 0.97 to 1.0 per frame
+  (docs/hyperframes-split.md, "Measured on Cloudflare").
+- **Fixed, found on Cloudflare**: with one process per instance the distributed renderer captured with one browser
+  and used about 1 of 4 vCPU; each process now gets `CPUs / processes` capture browsers. A split render below the
+  composition's size failed its duration check by 2 frames (B-frames in the re-encode); now encoded without them.
+- **Shared plan in R2**: the first instance makes HyperFrames' plan and uploads it with a receipt (key, plan hash,
+  SHA-256); the others fetch it instead of planning, and plan themselves if it does not come within 60 s or does not
+  match. Every chunk records where its plan came from. Measured: saves the CPU of planning on every other instance;
+  no wall time when all instances start together. CI renders it against the storage stand-in.
+- **Determinism pre-flight** (`packages/hyperframes-engine/preflight.ts`): flags `Date.now()`, `performance.now()`,
+  `new Date()`, `Math.random()` and network scripts, stylesheets and fonts in the project's own code; by default the
+  render then runs in one piece with a `plan_warning`; `"preflight": "off"` or `"strict"`.
+- **CDN scripts in the project**: `scripts/vendor-scripts.mjs` takes `<script src="https://...">` into
+  `assets/vendor/` with a `vendor.lock.json` (SHA-256 checked on every fetch). The three example projects load GSAP
+  from the project now; `npm run assets` fetches it.
+
 Deploy to Cloudflare button and an HTTP API (2026-11-28):
 
 - **The repository root is a deployable service**: `wrangler.jsonc`, `deploy/Dockerfile` (Remotion, HyperFrames and

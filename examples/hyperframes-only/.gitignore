@@ -6,3 +6,5 @@ composition/.hyperframes/
 long/assets/tone.wav
 long/.hyperframes/
 .render-work-compare-*/
+composition/assets/vendor/
+long/assets/vendor/

@@ -85,6 +85,13 @@ jobs:
         env:
           HYPERFRAMES_PROJECTS_DIR: .
           HYPERFRAMES_CLI_DIR: .
+      # Storage mode for HyperFrames: 3 chunks on 3 local instances through a store in memory. The first instance makes
+      # HyperFrames' plan and uploads it; the other two must fetch it (the harness fails otherwise).
+      - name: HyperFrames example, chunks and one shared plan through object storage (stand-in)
+        working-directory: examples/hyperframes-only
+        run: |
+          node ../../packages/core/bin/with-typescript-run.mjs ../../packages/core/test/e2e-storage.ts gateway combine out/ci-hf-storage.mp4 hyperframes
+          node ../../packages/core/scripts/verify.mjs out/ci-hf-storage.mp4 --frames 240 --joins 80,160 --tone
       - name: Mixed example
         working-directory: examples/mixed
         run: |
