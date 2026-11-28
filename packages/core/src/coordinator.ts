@@ -487,7 +487,7 @@ export function progressOf(job: JobState, now = Date.now()): RenderProgress {
   const instanceSeconds = job.instances.reduce((sum, instance) => sum + (instance.gone ? instance.wallSeconds : ((job.finishedAt ?? now) - instance.startedAt) / 1000), 0);
   const cpuSeconds = job.instances.reduce((sum, instance) => sum + instance.cpuSeconds, 0);
   return {
-    renderId: job.id, done, overallProgress: Math.round(overall * 1000) / 1000, phase: job.phase, framesRendered, frames,
+    renderId: job.id, done, overallProgress: Math.round(overall * 1000) / 1000, percent: Math.floor(overall * 100), phase: job.phase, framesRendered, frames,
     chunks: { total: job.chunks.length, rendered: job.chunks.filter((chunk) => chunk.state === 'rendered' || chunk.state === 'stored').length, stored, running: job.chunks.filter((chunk) => chunk.state === 'running').length },
     hedges: { started: job.hedges ?? 0, won: job.hedgesWon ?? 0 },
     instances: live(job).length,

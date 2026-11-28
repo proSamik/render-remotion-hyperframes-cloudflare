@@ -1,0 +1,2 @@
+# Secrets of the render service. The Deploy to Cloudflare button asks for each; by hand: npx wrangler secret put <NAME>
+RENDER_SECRET=change-me-to-a-long-random-value # every request must send "Authorization: Bearer <this>"; at least 16 characters: openssl rand -hex 24

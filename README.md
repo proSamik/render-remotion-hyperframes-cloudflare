@@ -17,6 +17,12 @@ read [AGENTS.md](AGENTS.md).
 
 This is a community guide. It is not made or endorsed by Remotion, HeyGen or Cloudflare.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/proSamik/render-remotion-hyperframes-cloudflare)
+
+The button deploys one render service with Remotion, HyperFrames and the mix, an R2 bucket and an HTTP API
+(upload, render, progress, download link, cancel, delete): [docs/deploy.md](docs/deploy.md), [docs/api.md](docs/api.md).
+It asks for one secret, the API key you will send with every request.
+
 **Licence, in one paragraph.** You deploy this to your own Cloudflare account and render your own Remotion /
 HyperFrames code. Remotion's licence applies to you as the deployer (free for individuals and companies up to 3
 people; larger companies need a Remotion company licence). Don't turn your deployment into a service where other
@@ -102,6 +108,25 @@ Cost is roughly a tie (above). Choose Cloudflare for the developer experience, n
   (https://developers.cloudflare.com/containers/platform/limits/).
 - The Remotion licence is the same on both: see [Licences](#licences).
 
+### How this differs from AWS Lambda
+
+- **Lambda:** each function is a container that AWS starts per call.
+  - Fixed limits: at most 15 minutes and 10 GB of memory per function, with low concurrency limits on new accounts.
+    No GPU-style graphics, so Remotion forces software rendering (`swangle`).
+  - Nothing coordinates the functions; you build that yourself with S3 and polling. Remotion's Lambda code does
+    exactly that.
+- **Cloudflare:** the Worker and Durable Objects are the coordinator. One Durable Object per render holds the job;
+  one Durable Object per container instance owns exactly that container, which it starts, talks to directly and
+  stops.
+  - Fewer moving parts: the job's state lives in the Durable Object next to the instances it polls, not in S3 files.
+  - No 15-minute limit per instance.
+  - Downloads from R2 are free.
+- **Where Lambda is ahead:** it is older and more battle-tested, and a function starts in about a second. A container
+  instance here started in about 3 s with the image already cached at the location (measured), and 1 to 2 minutes
+  when the image first had to be pulled there. The Durable Object scheduling policy used here is still in beta.
+
+Instance sizes and what each costs: [docs/costs.md](docs/costs.md#instance-types-and-cost).
+
 
 ## Status
 
@@ -180,6 +205,8 @@ Full version, every pitfall and the teardown: [docs/setup.md](docs/setup.md) (va
    alert in the dashboard.
 6. Teardown: `wrangler delete`, **then** `wrangler containers delete <id>` (deleting the Worker leaves the container
    application), images, bucket.
+
+Or skip all of it: the [Deploy to Cloudflare button](docs/deploy.md).
 
 Each example has the same three ways to run:
 
@@ -440,6 +467,8 @@ More: [docs/security.md](docs/security.md).
 | Costs and how to measure your own | [docs/costs.md](docs/costs.md) |
 | Mixing the two frameworks | [docs/mixed.md](docs/mixed.md) |
 | Setup from zero: account, permissions, R2 token, secrets, deploy, billing, limits, logs, teardown | [docs/setup.md](docs/setup.md) |
+| One-click deploy, and what the button runs | [docs/deploy.md](docs/deploy.md) |
+| HTTP API: upload, render, progress, link, cancel, delete; curl, JavaScript client, OpenAPI | [docs/api.md](docs/api.md), [clients/render-client.mjs](clients/render-client.mjs), [docs/openapi.yaml](docs/openapi.yaml) |
 | Using this from an AI coding agent | [docs/agents.md](docs/agents.md), [AGENTS.md](AGENTS.md) |
 | Security | [docs/security.md](docs/security.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |

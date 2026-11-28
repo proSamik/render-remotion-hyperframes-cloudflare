@@ -14,7 +14,8 @@
     "test": "node --test packages/core/test/*.test.ts packages/cloudflare-containers/test/*.test.ts packages/hyperframes-engine/test/*.test.ts",
     "local:remotion": "npm --prefix examples/remotion-only run local",
     "local:hyperframes": "npm --prefix examples/hyperframes-only run local",
-    "local:mixed": "npm --prefix examples/mixed run local"
+    "local:mixed": "npm --prefix examples/mixed run local",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261127.1",
@@ -24,5 +25,30 @@
     "typescript": "5.9.3",
     "wrangler": "4.169.0",
     "tsx": "4.23.15"
+  },
+  "cloudflare": {
+    "bindings": {
+      "RENDER_SECRET": {
+        "description": "The key every API request must send as `Authorization: Bearer <key>`. At least 16 characters; make one with `openssl rand -hex 24` and keep it in a password manager. Anyone who has it can start renders on your account."
+      },
+      "RENDER_BUCKET": {
+        "description": "R2 bucket for chunks, finished videos and uploaded input files. Downloads from R2 have no egress fee."
+      },
+      "MAX_INSTANCES_PER_RENDER": {
+        "description": "The most container instances (`standard-4`) one render may use: **your spend limit per render**. The `fast` tier asks for 4."
+      },
+      "INSTANCE_TYPE": {
+        "description": "Container size. Keep `standard-4` (4 vCPU, 12 GiB) for rendering."
+      },
+      "INACTIVITY_TIMEOUT_SECONDS": {
+        "description": "An idle instance stops after this many seconds. It bills memory and disk until then."
+      },
+      "ENABLE_INTERNET": {
+        "description": "`true` lets the containers fetch web fonts, remote media and uploaded files."
+      },
+      "SERVICE_NAME": {
+        "description": "Shown by `/health` and in every logged event."
+      }
+    }
   }
 }

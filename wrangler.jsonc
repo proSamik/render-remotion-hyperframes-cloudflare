@@ -1,0 +1,42 @@
+{
+  // The deployable render service: Remotion, HyperFrames and the mix in one Worker + one container image.
+  // Deploy to Cloudflare button, or `npm run deploy` here (docs/deploy.md). The examples/ folders have their own,
+  // smaller services; this one is the "all in one" for the HTTP API of docs/api.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "render-remotion-hyperframes",
+  "main": "packages/core/worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "RenderContainer",
+      // The Durable Object picks image and instance type when it starts a container (the current Containers API).
+      "scheduling_policy": "durable_object",
+      "images": { "render": { "dockerfile": "./deploy/Dockerfile", "build_context": "." } }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "RENDER_CONTAINER", "class_name": "RenderContainer" },
+      { "name": "RENDER_JOB", "class_name": "RenderJob" }
+    ]
+  },
+  "exports": {
+    "RenderContainer": { "type": "durable-object", "storage": "sqlite" },
+    "RenderJob": { "type": "durable-object", "storage": "sqlite" }
+  },
+  // Chunks, outputs and uploads. The Deploy button creates the bucket; by hand: npx wrangler r2 bucket create <name>.
+  "r2_buckets": [{ "binding": "RENDER_BUCKET", "bucket_name": "render-remotion-hyperframes" }],
+  "vars": {
+    "SERVICE_NAME": "render-remotion-hyperframes",
+    "INSTANCE_TYPE": "standard-4",
+    // The most container instances one render may use (the "fast" tier asks for 4). Your spend limit per render.
+    "MAX_INSTANCES_PER_RENDER": "4",
+    // An instance nobody talks to stops after this long. It bills memory and disk until then.
+    "INACTIVITY_TIMEOUT_SECONDS": "180",
+    // "false" cuts the containers off from the Internet (web fonts, remote media and uploads stop working).
+    "ENABLE_INTERNET": "true"
+  }
+}

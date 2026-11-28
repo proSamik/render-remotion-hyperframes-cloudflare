@@ -1,0 +1,12 @@
+{
+  "name": "render-service-image",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime dependencies of the deployable render service's image (deploy/Dockerfile): the Remotion renderer and HyperFrames, each pinned to the version the examples were written with.",
+  "dependencies": {
+    "@hyperframes/producer": "0.9.103",
+    "@remotion/renderer": "4.0.530",
+    "hyperframes": "0.9.103"
+  }
+}

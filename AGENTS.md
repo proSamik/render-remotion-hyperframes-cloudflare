@@ -77,6 +77,22 @@ Add `--webgl` when the composition uses three.js, shaders or any WebGL. For a vi
 not fit one 20 GB disk (more than about an hour of 1080p), add `--stitch=stream` and read
 [docs/long-videos.md](docs/long-videos.md) first: that path has not run on Cloudflare in this repository.
 
+## The all-in-one service (Deploy button)
+
+The repository root is itself a service (`wrangler.jsonc`, `deploy/Dockerfile`): Remotion, HyperFrames and mixed in
+one image. Deployed with the button or `npm run deploy` in the root. It takes a short request
+([docs/api.md](docs/api.md)):
+
+```bash
+curl -sX POST "$RENDER_SERVICE_URL/renders" -H "Authorization: Bearer $RENDER_SECRET" -H 'content-type: application/json' \
+  -d '{"engine":"remotion","composition":"Shapes","inputProps":{"durationInSeconds":10},"quality":"720p","tier":"standard"}'
+```
+
+`engine`: remotion, hyperframes, mixed. `range`: [first, last] frame. `quality`: 360p ... 2160p. `tier`: economy (1
+instance), standard (2), fast (4). Progress has `percent` and `phase`. `GET /renders/<id>/link` gives a download link
+that needs no secret; `POST /renders/<id>/cancel` stops a render. Input files: `PUT /uploads/<name>` returns a URL to
+pass in `inputProps`. A dependency-free client: `clients/render-client.mjs`.
+
 ## HTTP, if you cannot run Node
 
 Every request needs `Authorization: Bearer $RENDER_SECRET`.

@@ -243,6 +243,8 @@ export type RenderProgress = {
   renderId: string;
   done: boolean;
   overallProgress: number;
+  /** overallProgress x 100, whole number. */
+  percent: number;
   phase: JobState['phase'];
   framesRendered: number;
   frames: number;

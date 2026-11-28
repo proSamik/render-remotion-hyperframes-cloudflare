@@ -1,0 +1,141 @@
+openapi: 3.1.0
+info:
+  title: Render service (Remotion and HyperFrames on Cloudflare Containers)
+  version: 0.2.0
+  description: |
+    The HTTP API of the Worker in packages/core/worker/index.ts. Human version: docs/api.md.
+    Render your own code on your own account; uploads are input files, never code.
+servers:
+  - url: https://{name}.{subdomain}.workers.dev
+    variables:
+      name: { default: render-remotion-hyperframes }
+      subdomain: { default: your-subdomain }
+security:
+  - bearer: []
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, description: RENDER_SECRET }
+  parameters:
+    renderId:
+      name: renderId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^r[0-9a-f]{12}$' }
+  schemas:
+    SimpleRender:
+      type: object
+      required: [engine]
+      properties:
+        engine: { type: string, enum: [remotion, hyperframes, mixed] }
+        composition: { type: string, description: 'Remotion/mixed: composition id. HyperFrames: project folder.' }
+        inputProps: { type: object, additionalProperties: true }
+        variables: { type: object, additionalProperties: true }
+        range: { type: array, items: { type: integer, minimum: 0 }, minItems: 2, maxItems: 2, description: 'First and last frame, both included.' }
+        quality: { type: string, enum: ['360p', '480p', '720p', '1080p', '1440p', '2160p', 2k, 4k, composition], default: composition }
+        tier: { type: string, enum: [economy, standard, fast], default: standard }
+        preset: { type: string, enum: [draft, looks, standard, high, delivery], description: HyperFrames encoder preset }
+        format: { type: string, enum: [mp4, webm, mov], description: 'HyperFrames; only mp4 is split over instances.' }
+    FullRender:
+      type: object
+      required: [render]
+      properties:
+        render: { type: object, additionalProperties: true, description: Engine options (RenderOptions in packages/core/src/types.ts). }
+        fleet: { type: object, additionalProperties: true, description: Fleet options (FleetOptions in packages/core/src/types.ts). }
+    JobError:
+      type: object
+      properties:
+        at: { type: number }
+        kind: { type: string }
+        chunk: { type: integer }
+        message: { type: string }
+        fatal: { type: boolean }
+    Progress:
+      type: object
+      properties:
+        renderId: { type: string }
+        done: { type: boolean }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        overallProgress: { type: number }
+        phase: { type: string, enum: [planning, rendering, stitching, done, failed] }
+        framesRendered: { type: integer }
+        frames: { type: integer }
+        chunks: { type: object, properties: { total: { type: integer }, rendered: { type: integer }, stored: { type: integer }, running: { type: integer } } }
+        instances: { type: integer }
+        fatalErrorEncountered: { type: boolean }
+        errors: { type: array, items: { $ref: '#/components/schemas/JobError' } }
+        outputSizeInBytes: { type: [integer, 'null'] }
+        outputSha256: { type: [string, 'null'] }
+        timeToFinish: { type: [integer, 'null'], description: milliseconds }
+        costs: { type: object, properties: { accruedSoFar: { type: number }, currency: { type: string }, cpuSeconds: { type: number }, instanceSeconds: { type: number } } }
+    Error:
+      type: object
+      properties: { error: { type: string } }
+paths:
+  /health:
+    get:
+      summary: Service status
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        '403': { description: No or wrong secret }
+  /uploads/{name}:
+    put:
+      summary: Store an input file in R2 (up to 100 MB)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$' } }
+      requestBody: { required: true, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+      responses:
+        '201':
+          description: Stored. `url` is a signed link, valid 7 days, to pass to a composition.
+          content: { application/json: { schema: { type: object, properties: { uploadId: { type: string }, name: { type: string }, bytes: { type: integer }, url: { type: string } } } } }
+        '501': { description: No R2 bucket bound }
+  /uploads/{uploadId}:
+    delete:
+      summary: Delete an upload
+      parameters:
+        - { name: uploadId, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{32}$' } }
+      responses: { '200': { description: Deleted } }
+  /renders:
+    post:
+      summary: Start a render
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { oneOf: [{ $ref: '#/components/schemas/SimpleRender' }, { $ref: '#/components/schemas/FullRender' }] }
+      responses:
+        '202': { description: Started, content: { application/json: { schema: { type: object, properties: { renderId: { type: string } } } } } }
+        '400': { description: Not a render request, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /renders/{renderId}:
+    parameters: [{ $ref: '#/components/parameters/renderId' }]
+    get:
+      summary: Progress
+      responses:
+        '200': { description: Progress, content: { application/json: { schema: { $ref: '#/components/schemas/Progress' } } } }
+        '404': { description: No such render }
+    delete:
+      summary: Stop the render and delete its files
+      responses: { '200': { description: Deleted } }
+  /renders/{renderId}/cancel:
+    parameters: [{ $ref: '#/components/parameters/renderId' }]
+    post:
+      summary: Stop the render; the progress stays readable
+      responses: { '200': { description: Progress after cancelling, content: { application/json: { schema: { $ref: '#/components/schemas/Progress' } } } } }
+  /renders/{renderId}/output:
+    parameters: [{ $ref: '#/components/parameters/renderId' }]
+    get:
+      summary: The finished file (Bearer secret, or a signed link from /link)
+      parameters:
+        - { name: presign, in: query, schema: { type: integer }, description: 'With R2 S3 keys: answer { url } to R2 instead of the file.' }
+      responses:
+        '200': { description: The file, content: { video/mp4: { schema: { type: string, format: binary } } } }
+        '409': { description: No output yet }
+        '410': { description: Without R2, the instance that held the output is gone }
+  /renders/{renderId}/link:
+    parameters: [{ $ref: '#/components/parameters/renderId' }]
+    get:
+      summary: A download link that needs no secret
+      parameters:
+        - { name: expires, in: query, schema: { type: integer, minimum: 60, maximum: 604800, default: 3600 } }
+      responses:
+        '200': { description: Link, content: { application/json: { schema: { type: object, properties: { url: { type: string } } } } } }
+        '409': { description: No output yet }

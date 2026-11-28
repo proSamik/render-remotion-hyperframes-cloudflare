@@ -18,6 +18,31 @@ are fractions of a cent per render. Workers Paid has a $5 monthly minimum.
 So a render costs `cpuSeconds x 0.00002 + instanceSeconds x 0.0000314`, plus container egress of about 2 x the output
 size once the monthly allowance is used ([below](#container-egress)). `estimatePrice()` computes exactly that.
 
+## Instance types and cost
+
+From https://developers.cloudflare.com/containers/platform/limits/ and /containers/pricing/, read November 2026.
+
+| Type | vCPU | Memory | Disk |
+| --- | --- | --- | --- |
+| `lite` | 1/16 | 256 MiB | 2 GB |
+| `basic` | 1/4 | 1 GiB | 4 GB |
+| `standard-1` | 1/2 | 4 GiB | 8 GB |
+| `standard-2` | 1 | 6 GiB | 12 GB |
+| `standard-3` | 2 | 8 GiB | 16 GB |
+| `standard-4` | 4 | 12 GiB | 20 GB |
+
+- **Custom sizes**: with the Durable Object scheduling policy used here, `ctx.container.start({ vcpu, memoryMib,
+  diskMb, ... })` instead of a named `instance`. Minimum 1/16 vCPU (`0.0625`), 256 MiB, 2 GB (`2000` MB); the maximum
+  per instance is your account limit, by default 4 vCPU, 12 GiB and 20 GB, which Cloudflare can raise on request.
+  This repository passes the named type from `INSTANCE_TYPE` (`standard-4`: rendering wants every core).
+- **Billing**, in 10 ms steps while an instance runs: CPU on **active use** ($0.000020 per vCPU-second), memory
+  ($0.0000025 per GiB-second) and disk ($0.00000007 per GB-second) on the **provisioned** size, busy or idle.
+  Workers Paid includes 375 vCPU-minutes, 25 GiB-hours of memory and 200 GB-hours of disk per month. Egress:
+  $0.025 per GB in North America and Europe after 1 TB per month, $0.04 elsewhere and $0.05 in Oceania, Korea and
+  Taiwan after 500 GB (next section).
+- So a `standard-4` costs $0.0000314 per second for memory and disk whether it renders or waits, plus up to
+  $0.00008 per second of CPU when all 4 vCPU are busy.
+
 ## Container egress
 
 Cloudflare bills bytes that containers send out ("Egress from Containers": $0.025 per GB in North America and

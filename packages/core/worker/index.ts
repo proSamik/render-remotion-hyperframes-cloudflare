@@ -12,14 +12,21 @@
  * Written against the Durable Object Container API (`ctx.container`, scheduling_policy "durable_object"), which
  * replaced the `Container` class of `@cloudflare/containers` in the Cloudflare docs in November 2026.
  *
- * HTTP API (every request needs `Authorization: Bearer <RENDER_SECRET>`):
+ * HTTP API (every request needs `Authorization: Bearer <RENDER_SECRET>`, except the signed links). docs/api.md,
+ * docs/openapi.yaml:
  *   GET    /health                    -> { ok, service, storage, instanceType, maxInstancesPerRender }
- *   POST   /renders  { render, fleet } -> { renderId }
+ *   PUT    /uploads/<file name>       -> stores an input file in R2: { uploadId, name, bytes, url } (url: signed, 7 days)
+ *   DELETE /uploads/<uploadId>        -> deletes it
+ *   POST   /renders  { render, fleet } or the short form { engine, composition, ... } (../src/api-request.ts)
+ *                                     -> { renderId }
  *   GET    /renders/<id>              -> progress (see RenderProgress in ../src/types.ts)
  *   GET    /renders/<id>/output       -> the file; with ?presign=<seconds> a time-limited R2 URL as { url }
+ *   GET    /renders/<id>/link?expires=<seconds> -> { url }: a download link that needs no secret
+ *   POST   /renders/<id>/cancel       -> stops the instances, keeps the state (phase "failed", kind job_cancelled)
  *   DELETE /renders/<id>              -> stops the instances, deletes the files
  */
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
+import { isSimpleRequest, toJobRequest } from '../src/api-request.ts';
 import { cleanup, createJob, progressOf, step } from '../src/coordinator.ts';
 import { toTrackerEvent } from '../src/events.ts';
 import { createPresigner, type Presigner } from '../src/s3-presign.ts';
@@ -225,6 +232,14 @@ export class RenderJob extends DurableObject<Env> {
     return new Response(response.body, { headers });
   }
 
+  /** Stops the render and its instances. The state stays readable; the files go with DELETE. */
+  async cancel(): Promise<RenderProgress | null> {
+    const job = await this.load();
+    if (!job) return null;
+    if (job.phase !== 'done' && job.phase !== 'failed') { await cleanup(job, this.fleet(job)); await this.ctx.storage.put('job', job); }
+    return progressOf(job);
+  }
+
   async remove(): Promise<void> {
     const job = await this.load();
     if (!job) return;
@@ -241,6 +256,28 @@ export class RenderJob extends DurableObject<Env> {
   }
 }
 
+/** HMAC-SHA256 of `message` with RENDER_SECRET, hex. Links signed with it need no Authorization header. */
+async function sign(env: Env, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.RENDER_SECRET ?? ''), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message)))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+async function signedLink(env: Env, origin: string, path: string, seconds: number): Promise<string> {
+  const expires = Math.floor(Date.now() / 1000) + Math.max(60, Math.min(seconds, 7 * 86400));
+  return `${origin}${path}?expires=${expires}&sig=${await sign(env, `${path}:${expires}`)}`;
+}
+/** A link made by signedLink(): right signature, not expired. Compared in constant time. */
+async function validLink(env: Env, url: URL): Promise<boolean> {
+  const expires = Number(url.searchParams.get('expires'));
+  const given = url.searchParams.get('sig') ?? '';
+  if (!env.RENDER_SECRET || env.RENDER_SECRET.length < 16 || !(expires > Date.now() / 1000)) return false;
+  const expected = await sign(env, `${url.pathname}:${expires}`);
+  let difference = given.length ^ expected.length;
+  for (let index = 0; index < expected.length; index += 1) difference |= expected.charCodeAt(index) ^ (given.charCodeAt(index) || 0);
+  return difference === 0;
+}
+
+const UPLOAD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+
 function authorized(request: Request, env: Env): boolean {
   const secret = env.RENDER_SECRET ?? '';
   const given = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
@@ -252,24 +289,64 @@ function authorized(request: Request, env: Env): boolean {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (!authorized(request, env)) return new Response('forbidden', { status: 403 });
     const url = new URL(request.url);
+    // Signed links (uploads for the containers, outputs for whoever you give the link): no secret, GET only.
+    if (request.method === 'GET' && url.searchParams.has('sig')) {
+      if (!(await validLink(env, url))) return new Response('link expired or invalid', { status: 403 });
+      const upload = /^\/files\/(uploads\/[0-9a-f]{32}\/[A-Za-z0-9][A-Za-z0-9._-]{0,120})$/.exec(url.pathname);
+      if (upload && env.RENDER_BUCKET) {
+        const object = await env.RENDER_BUCKET.get(upload[1]!);
+        return object ? new Response(object.body, { headers: { 'content-length': String(object.size), etag: object.httpEtag, 'content-type': object.httpMetadata?.contentType ?? 'application/octet-stream' } }) : new Response('not found', { status: 404 });
+      }
+      const output = /^\/renders\/(r[0-9a-f]{12})\/output$/.exec(url.pathname);
+      if (output) return env.RENDER_JOB.getByName(output[1]!).fetch(new Request(`http://job/output`));
+      return new Response('not found', { status: 404 });
+    }
+    if (!authorized(request, env)) return new Response('forbidden', { status: 403 });
     const maxInstances = Number(env.MAX_INSTANCES_PER_RENDER ?? 4);
     if (request.method === 'GET' && url.pathname === '/health') {
       return Response.json({ ok: true, service: env.SERVICE_NAME ?? 'render-service', storage: Boolean(env.RENDER_BUCKET), instanceType: env.INSTANCE_TYPE ?? 'standard-4', maxInstancesPerRender: maxInstances });
     }
+    const uploadPut = /^\/uploads\/([^/]+)$/.exec(url.pathname);
+    if (uploadPut && request.method === 'PUT') {
+      // Input files (images, video, audio, JSON) that a composition reads by URL. Not code: the bundle is in the image.
+      if (!env.RENDER_BUCKET) return Response.json({ error: 'uploads need an R2 bucket bound as RENDER_BUCKET' }, { status: 501 });
+      const name = decodeURIComponent(uploadPut[1]!);
+      if (!UPLOAD_NAME.test(name)) return Response.json({ error: 'file name: letters, digits, dot, dash, underscore' }, { status: 400 });
+      if (!request.body) return Response.json({ error: 'empty body' }, { status: 400 });
+      const uploadId = crypto.randomUUID().replaceAll('-', '');
+      const key = `uploads/${uploadId}/${name}`;
+      const object = await env.RENDER_BUCKET.put(key, request.body, { httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' } });
+      return Response.json({ uploadId, name, bytes: object?.size ?? 0, url: await signedLink(env, url.origin, `/files/${key}`, 7 * 86400) }, { status: 201 });
+    }
+    if (uploadPut && request.method === 'DELETE' && /^[0-9a-f]{32}$/.test(uploadPut[1]!) && env.RENDER_BUCKET) {
+      const listed = await env.RENDER_BUCKET.list({ prefix: `uploads/${uploadPut[1]}/` });
+      if (listed.objects.length) await env.RENDER_BUCKET.delete(listed.objects.map((object) => object.key));
+      return Response.json({ deleted: uploadPut[1], objects: listed.objects.length });
+    }
     if (request.method === 'POST' && url.pathname === '/renders') {
-      const body = (await request.json().catch(() => null)) as JobRequest | null;
+      let body = (await request.json().catch(() => null)) as JobRequest | null;
+      if (isSimpleRequest(body)) {
+        const translated = toJobRequest(body, maxInstances);
+        if ('error' in translated) return Response.json({ error: translated.error }, { status: 400 });
+        body = translated.request;
+      }
       if (!body || typeof body.render !== 'object' || body.render === null) return Response.json({ error: 'body must be { render: {...}, fleet?: {...} }' }, { status: 400 });
       const instances = Math.floor(body.fleet?.instances ?? 1);
       if (!(instances >= 1 && instances <= maxInstances)) return Response.json({ error: `fleet.instances must be 1 to ${maxInstances} (MAX_INSTANCES_PER_RENDER)` }, { status: 400 });
       const id = `r${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
       return Response.json(await env.RENDER_JOB.getByName(id).start(id, body), { status: 202 });
     }
-    const match = /^\/renders\/(r[0-9a-f]{12})(\/output)?$/.exec(url.pathname);
+    const match = /^\/renders\/(r[0-9a-f]{12})(\/output|\/link|\/cancel)?$/.exec(url.pathname);
     if (match) {
       const job = env.RENDER_JOB.getByName(match[1]!);
-      if (match[2] && request.method === 'GET') return job.fetch(request);
+      if (match[2] === '/link' && request.method === 'GET') {
+        const progress = await job.progress();
+        if (!progress?.done) return Response.json({ error: 'no output yet' }, { status: 409 });
+        return Response.json({ url: await signedLink(env, url.origin, `/renders/${match[1]}/output`, Number(url.searchParams.get('expires')) || 3600) });
+      }
+      if (match[2] === '/cancel' && request.method === 'POST') { const progress = await job.cancel(); return progress ? Response.json(progress) : Response.json({ error: 'no such render' }, { status: 404 }); }
+      if (match[2] === '/output' && request.method === 'GET') return job.fetch(request);
       if (!match[2] && request.method === 'GET') { const progress = await job.progress(); return progress ? Response.json(progress) : Response.json({ error: 'no such render' }, { status: 404 }); }
       if (!match[2] && request.method === 'DELETE') { await job.remove(); return Response.json({ deleted: match[1] }); }
     }

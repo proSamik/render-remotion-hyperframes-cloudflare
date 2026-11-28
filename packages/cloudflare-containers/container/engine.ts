@@ -14,6 +14,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import type { Engine, Plan, TaskRequest } from '../../core/src/types.ts';
+import { outputSize } from '../../core/src/resolution.ts';
 import { streamingStitch } from './streaming-stitch.ts';
 
 /** Options of one render. Names follow renderMediaOnLambda() where the idea is the same. */
@@ -29,6 +30,11 @@ export type RemotionRenderOptions = {
   imageFormat?: 'jpeg' | 'png' | 'webp' | 'pdf' | 'none';
   jpegQuality?: number;
   scale?: number;
+  /**
+   * Output size by name (360p ... 2160p, 4k, "composition"): sets `scale` so the output lands on even sides
+   * (../../core/src/resolution.ts). Ignored when `scale` is given.
+   */
+  quality?: string;
   crf?: number | null;
   videoBitrate?: string | null;
   audioBitrate?: string | null;
@@ -114,6 +120,8 @@ export function createRemotionEngine(hooks: Hooks = {}): Engine {
     try {
       if (!render.composition) throw new Error('composition is required');
       const composition = await selectComposition({ ...shared, id: render.composition });
+      // Same scale for every chunk: it is computed from the composition's size, which every chunk sees alike.
+      if (render.quality && render.scale === undefined) render.scale = outputSize(composition.width, composition.height, render.quality).scale;
       return { browser, shared, composition };
     } catch (error) { await browser.close({ silent: true }).catch(() => undefined); throw error; }
   }
@@ -124,7 +132,8 @@ export function createRemotionEngine(hooks: Hooks = {}): Engine {
       const { browser, composition } = await open(render, 0, 1, 'plan');
       await browser.close({ silent: true }).catch(() => undefined);
       // Only H.264 can be rendered in parts: a part is an MPEG-TS stream (`h264-ts`) that combineChunks() joins.
-      return { fps: composition.fps, durationInFrames: composition.durationInFrames, width: composition.width, height: composition.height, chunkable: (render.codec ?? 'h264') === 'h264' };
+      const scale = render.scale ?? 1;
+      return { fps: composition.fps, durationInFrames: composition.durationInFrames, width: Math.round(composition.width * scale), height: Math.round(composition.height * scale), chunkable: (render.codec ?? 'h264') === 'h264' };
     },
 
     async render({ task, dir, onProgress }): Promise<string[]> {

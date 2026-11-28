@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["packages/core/src", "packages/core/test", "packages/cloudflare-containers/src", "packages/cloudflare-containers/container", "packages/cloudflare-containers/scripts", "packages/cloudflare-containers/test", "packages/hyperframes-engine", "examples/*/engine.ts"]
+  "include": ["packages/core/src", "packages/core/test", "packages/cloudflare-containers/src", "packages/cloudflare-containers/container", "packages/cloudflare-containers/scripts", "packages/cloudflare-containers/test", "packages/hyperframes-engine", "examples/*/engine.ts", "deploy/engine.ts"]
 }

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+Deploy to Cloudflare button and an HTTP API (2026-11-28):
+
+- **The repository root is a deployable service**: `wrangler.jsonc`, `deploy/Dockerfile` (Remotion, HyperFrames and
+  the mix in one image; the Remotion bundles and the mixed layer are made inside the Docker build, so the builder
+  needs nothing but Docker), `deploy/engine.ts` (engine per render: `remotion`, `hyperframes`, `mixed`), an R2 bucket
+  binding, `.dev.vars.example` (the one secret, `RENDER_SECRET`), `cloudflare.bindings` descriptions in
+  `package.json`, `npm run deploy`. The README has the button; docs/deploy.md is the user's step-by-step.
+- **HTTP API** (docs/api.md, docs/openapi.yaml, `clients/render-client.mjs`): a short request form
+  (`engine`, `composition`, `inputProps` / `variables`, `range`, `quality`, `tier`) next to the full one;
+  `percent` in the progress; `PUT /uploads/<name>` for input files (returns a signed link the containers fetch);
+  `GET /renders/<id>/link` (a download link that needs no secret, HMAC-signed with the secret, expiring);
+  `POST /renders/<id>/cancel`. The Remotion engine takes `quality` ("480p" ... "4k") like the HyperFrames one.
+- Found while validating: `wrangler deploy` creates a missing R2 bucket named in `r2_buckets` by itself
+  ("Resources provisioned").
+- README: "How this differs from AWS Lambda". docs/costs.md: instance types (named and custom) and how each part is
+  billed.
+
 Setup from zero (2026-11-28, validated end to end on Cloudflare under a throw-away name):
 
 - **docs/setup.md**: account and Workers Paid, the permissions (Workers Scripts, Containers, R2), wrangler, the R2
