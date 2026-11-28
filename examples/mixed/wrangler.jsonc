@@ -34,7 +34,8 @@
     "INACTIVITY_TIMEOUT_SECONDS": "180",
     // "false" cuts the containers off from the Internet (web fonts and remote media stop working).
     "ENABLE_INTERNET": "true"
-  }
-  // Optional R2 bucket for chunks and outputs (docs/r2.md). Without it files travel between instances.
+  },
+  // Optional R2 bucket for chunks and outputs (docs/r2.md, docs/setup.md). Without it files travel between instances.
+  // Create it (npx wrangler r2 bucket create <name>), then remove the // below and put its name in.
   // "r2_buckets": [{ "binding": "RENDER_BUCKET", "bucket_name": "rrh-renders" }]
 }

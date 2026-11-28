@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+Setup from zero (2026-11-28, validated end to end on Cloudflare under a throw-away name):
+
+- **docs/setup.md**: account and Workers Paid, the permissions (Workers Scripts, Containers, R2), wrangler, the R2
+  bucket and the R2 S3 API token (dashboard steps), every secret and variable, building and pushing the image (local
+  Docker, Docker on another machine over SSH, or a pushed registry image), deploy pitfalls (exports vs migrations,
+  restarts, starts that hang right after a deploy, registry login expiry, stale `containers list`), first render,
+  progress and download, logs, limits, billing (CPU, memory, disk, container egress, idle instances), budget alerts,
+  updating, teardown. Short version in the README.
+- Found while validating: `wrangler delete` leaves the container application running and billing (it says so);
+  wrangler builds with `docker build --load`, so a Docker CLI without buildx fails with `unknown flag: --load`;
+  wrangler has no command to list or empty an R2 bucket; the usage dataset names applications as dashed UUIDs while
+  `wrangler containers list` prints them without dashes; usage appears about 5 minutes late.
+- **packages/core/scripts/cf-usage.mjs**: CPU, memory, disk and egress that Cloudflare counted for an application in a
+  time window (`containersUsageAdaptiveGroups`), with the list price of each.
+- The examples' `wrangler.jsonc`: removing `//` before `r2_buckets` is now the whole edit (the comma was missing).
+
 Container egress and idle warm time (2026-11-28, measured with the private implementation of this design; docs only):
 
 - **Container egress is billed, and the R2 binding does not avoid it.** Cloudflare bills bytes that containers send

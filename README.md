@@ -165,6 +165,22 @@ export RENDER_SERVICE_URL=https://rrh-remotion-only.<your-subdomain>.workers.dev
 npm run cloud                                                         # out/cloud.mp4, rendered on 2 instances
 ```
 
+### Setup from zero, short version
+
+Full version, every pitfall and the teardown: [docs/setup.md](docs/setup.md) (validated end to end on 2026-11-28).
+
+1. Cloudflare account on **Workers Paid**; your user needs *Workers Scripts: Edit*, *Containers: Edit*, *Workers R2
+   Storage: Edit*.
+2. Node 22.18+, Docker (or `DOCKER_HOST=ssh://...` to a Linux box with Docker), `npm run setup`, `npx wrangler login`.
+3. Pick a name in `examples/remotion-only/wrangler.jsonc`; `npx wrangler r2 bucket create <name>` and uncomment the
+   `r2_buckets` line.
+4. `npm run deploy` (bundles, builds and pushes the image, deploys), then
+   `openssl rand -hex 24 | tee /dev/stderr | npx wrangler secret put RENDER_SECRET`.
+5. Wait a minute, then `npm run cloud`. Read the cost back with `packages/core/scripts/cf-usage.mjs`; set a budget
+   alert in the dashboard.
+6. Teardown: `wrangler delete`, **then** `wrangler containers delete <id>` (deleting the Worker leaves the container
+   application), images, bucket.
+
 Each example has the same three ways to run:
 
 | | Remotion only | HyperFrames only | Mixed |
@@ -423,6 +439,7 @@ More: [docs/security.md](docs/security.md).
 | R2, presigned URLs and what to sign | [docs/r2.md](docs/r2.md) |
 | Costs and how to measure your own | [docs/costs.md](docs/costs.md) |
 | Mixing the two frameworks | [docs/mixed.md](docs/mixed.md) |
+| Setup from zero: account, permissions, R2 token, secrets, deploy, billing, limits, logs, teardown | [docs/setup.md](docs/setup.md) |
 | Using this from an AI coding agent | [docs/agents.md](docs/agents.md), [AGENTS.md](AGENTS.md) |
 | Security | [docs/security.md](docs/security.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |

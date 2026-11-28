@@ -6,6 +6,9 @@ crumb: 'Cloudflare Containers'
 
 # Setup
 
+The complete walk-through from a new Cloudflare account to teardown, with every pitfall we hit, is
+[docs/setup.md](../setup.md). This page is the short form for the Remotion package.
+
 ## 1. Requirements
 
 - A Cloudflare account on the Workers Paid plan. Containers are not available on the free plan.
@@ -92,7 +95,10 @@ bucket, chunks and outputs are stored there. See [r2.md](../r2.md).
 ## Uninstall
 
 ```bash
-npx wrangler delete                          # the Worker
-npx wrangler containers list                 # then: npx wrangler containers delete <id>
+npx wrangler containers list                 # note the ID first
+npx wrangler delete                          # the Worker (the container application stays and bills until the next line)
+npx wrangler containers delete <id>
 npx wrangler containers images list          # then: npx wrangler containers images delete <image>:<tag>
 ```
+
+Bucket, token and the rest: [docs/setup.md, section 12](../setup.md#12-teardown).
