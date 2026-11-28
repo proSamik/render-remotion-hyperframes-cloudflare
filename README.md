@@ -196,6 +196,7 @@ Table 1, Cloudflare, **measured**:
 | Standard | 1:44:00 | 1.89 GB | 7.99 GB | 5:49 | 7:36 | 19:35 | 33:18 | $2.23 |
 | Fast | 1:44:00 | 1.89 GB (already in R2) | 7.69 GB | 0:12 | 6:33 | 21:16 | 28:28 | $2.50 |
 | Economy | 1:44:00 | 1.89 GB (already in R2) | 8.15 GB | 0:17 | 12:46 | 19:55 | 33:17 | $2.10 |
+| Saver | 1:44:00 | 1.89 GB (already in R2) | 8.15 GB | 0:12 | 18:15 | 21:25 | 40:13 | $1.71 |
 
 Table 2, the same jobs on AWS, **estimated** (nothing was run on AWS):
 
@@ -204,6 +205,7 @@ Table 2, the same jobs on AWS, **estimated** (nothing was run on AWS):
 | Standard | $1.47 to $2.50 | $0.67 | about $0.03 | $2.17 to $3.20 | $2.23 |
 | Fast | $1.59 to $2.70 | $0.64 | about $0.03 | $2.26 to $3.37 | $2.50 |
 | Economy | $1.45 to $2.46 | $0.68 | about $0.03 | $2.16 to $3.17 | $2.10 |
+| Saver | $1.20 to $2.04 | $0.68 | about $0.03 | $1.91 to $2.75 | $1.71 |
 
 Notes:
 
@@ -215,7 +217,7 @@ Notes:
 * Not included on the AWS side: functions reading the inputs from S3 also count as data transfer according to
   Remotion's documentation (at least $0.17 for 1.89 GB read once).
 * Honest reading: Cloudflare is cheaper by up to about a third on this job. It saves the $0.65 to $0.70 of egress
-  and the `swangle` penalty, but pays for provisioned memory ($0.74 to $0.91 here), so with no penalty Lambda
+  and the `swangle` penalty, but pays for provisioned memory ($0.60 to $0.91 here), so with no penalty Lambda
   roughly ties.
 
 Method: CPU seconds are the virtual machine's busy time from `/proc/stat` while it works; cost is
