@@ -12,6 +12,9 @@ jobs:
     env:
       HYPERFRAMES_TELEMETRY: '0'
       DO_NOT_TRACK: '1'
+      # @hyperframes/producer depends on puppeteer, whose install would download a Chrome nobody uses here:
+      # HyperFrames renders with its own pinned chrome-headless-shell.
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -61,11 +64,27 @@ jobs:
           node ../../packages/core/scripts/verify.mjs out/ci-gateway.mp4 --frames 90 --joins 30,60 --tone
           node ../../packages/core/bin/with-typescript-run.mjs ../../packages/core/test/e2e-storage.ts presigned combine out/ci-presigned.mp4
           node ../../packages/core/scripts/verify.mjs out/ci-presigned.mp4 --frames 90 --joins 30,60 --tone
-      - name: HyperFrames example
+      # Split rendering: 3 chunks on one local instance, joined; the sound must have no click or gap at the joins and a
+      # beep on every second. Then the old path (one `hyperframes render`), then one chunk against three on two local
+      # instances: same frame count, duration and sound, SSIM of every frame against the one-chunk render.
+      - name: HyperFrames example, split into chunks
         working-directory: examples/hyperframes-only
         run: |
           npm run local
-          node ../../packages/core/scripts/verify.mjs out/local.mp4 --frames 240
+          node ../../packages/core/scripts/verify.mjs out/local.mp4 --frames 240 --joins 80,160 --tone
+      - name: HyperFrames example, one piece with the CLI
+        working-directory: examples/hyperframes-only
+        run: |
+          npm run local:cli
+          node ../../packages/core/scripts/verify.mjs out/local-cli.mp4 --frames 240
+      - name: HyperFrames example, one chunk against three, and a frame range
+        working-directory: examples/hyperframes-only
+        run: |
+          npm run compare
+          node ../../packages/core/bin/with-typescript-run.mjs ../../packages/hyperframes-engine/test/compare-split.ts --project composition --chunks 2 --frames 45-200
+        env:
+          HYPERFRAMES_PROJECTS_DIR: .
+          HYPERFRAMES_CLI_DIR: .
       - name: Mixed example
         working-directory: examples/mixed
         run: |

@@ -58,6 +58,101 @@ export function classOfRange(segments: Segment[] | undefined, startFrame: number
   return COST_CLASSES[heaviest]!;
 }
 
+/** One chunk of a job: frames `[startFrame, endFrame)` and the heaviest class visible in them. */
+export type ChunkRange = { startFrame: number; endFrame: number; cls: CostClass };
+export type RangeOptions = {
+  /** The job's frames, end exclusive. */
+  startFrame: number;
+  endFrame: number;
+  fps: number;
+  segments?: Segment[];
+  /** About how many chunks: one per render process of the fleet. */
+  targetChunks: number;
+  /** Bounds in seconds of video. A chunk shorter than `min` wastes its start-up; one longer than `max` makes a retry expensive. */
+  minSeconds?: number;
+  maxSeconds?: number;
+  /** Variable chunks only: no chunk holds more than this many seconds of heavy frames (a cap on top of the cost rule). */
+  heavyMaxSeconds?: number;
+  /** Variable chunks only: what a frame of each class costs against a light one. Default: from EXAMPLE_RATES (gl 1.5, heavy 4). */
+  weights?: Partial<Record<CostClass, number>>;
+  /**
+   * false (Remotion): every chunk has the same length except the last; segments are ignored, because the join needs a
+   * fixed grid. true (HyperFrames): chunks of equal COST, so a heavy range gets shorter chunks.
+   */
+  variable?: boolean;
+};
+
+/** Cost of a frame of each class against a light one: the inverse of the example rates (light 1, gl 1.5, heavy 4). */
+export const CLASS_WEIGHTS: Record<CostClass, number> = {
+  light: 1,
+  gl: Math.round((EXAMPLE_RATES.light.fps / EXAMPLE_RATES.gl.fps) * 10) / 10,
+  heavy: Math.round(EXAMPLE_RATES.light.fps / EXAMPLE_RATES.heavy.fps),
+};
+
+/**
+ * Cuts a job into chunks. Pure function.
+ *
+ *   fixed grid (variable false, Remotion)  length = frames / targetChunks inside [min, max]; equal chunks, the last one
+ *                                           shorter.
+ *   equal cost (variable true, HyperFrames) every frame costs its class's weight (light 1, heavy 4 by default); the job
+ *                                           is cut into targetChunks chunks of equal cost, so four processes finish
+ *                                           together even when one scene is four times slower. The number of chunks
+ *                                           is bounded so that an average chunk stays inside [min, max]; no chunk is
+ *                                           shorter than `min` unless the job is; `heavyMax` caps the heavy frames of
+ *                                           one chunk (a long chunk over a heavy range is split in equal parts).
+ */
+export function planRanges(options: RangeOptions): ChunkRange[] {
+  const { startFrame, endFrame, fps } = options;
+  const frames = Math.max(0, Math.floor(endFrame) - Math.floor(startFrame));
+  if (frames === 0) return [];
+  const min = Math.max(1, Math.round((options.minSeconds ?? 2) * fps));
+  const max = Math.max(min, Math.round((options.maxSeconds ?? 30) * fps));
+  const at = (from: number, to: number): ChunkRange => ({ startFrame: from, endFrame: to, cls: classOfRange(options.segments, from, to) });
+  if (!options.variable) {
+    const length = Math.min(max, Math.max(min, Math.ceil(frames / Math.max(1, Math.floor(options.targetChunks)))));
+    const ranges: ChunkRange[] = [];
+    for (let from = startFrame; from < endFrame; from += length) ranges.push(at(from, Math.min(endFrame, from + length)));
+    return ranges;
+  }
+  // Cost of every frame: the heaviest class visible on it.
+  const weights = { ...CLASS_WEIGHTS, ...options.weights };
+  const cost = new Float64Array(frames).fill(weights.light);
+  for (const segment of options.segments ?? []) {
+    const weight = weights[segment.cls];
+    for (let frame = Math.max(startFrame, segment.startFrame); frame < Math.min(endFrame, segment.endFrame); frame += 1) cost[frame - startFrame] = Math.max(cost[frame - startFrame]!, weight);
+  }
+  const total = cost.reduce((sum, value) => sum + value, 0);
+  const count = Math.max(1, Math.min(Math.max(1, Math.floor(frames / min)), Math.max(Math.ceil(frames / max), Math.round(options.targetChunks))));
+  // Cut where the running cost passes k/count of the total, at the nearer frame; never closer than `min` frames.
+  const cuts: number[] = [];
+  let running = 0;
+  let last = 0;
+  for (let index = 0; index < frames && cuts.length < count - 1; index += 1) {
+    const before = running;
+    running += cost[index]!;
+    const target = (total * (cuts.length + 1)) / count;
+    if (running < target) continue;
+    const cut = target - before < running - target ? index : index + 1;
+    if (cut - last >= min && frames - cut >= min) { cuts.push(cut); last = cut; }
+  }
+  const bounds = [0, ...cuts, frames];
+  let ranges: ChunkRange[] = [];
+  for (let index = 0; index + 1 < bounds.length; index += 1) ranges.push(at(startFrame + bounds[index]!, startFrame + bounds[index + 1]!));
+  // The cap on heavy frames per chunk.
+  if (options.heavyMaxSeconds !== undefined) {
+    const heavyMax = Math.max(1, Math.round(options.heavyMaxSeconds * fps));
+    ranges = ranges.flatMap((range) => {
+      let heavy = 0;
+      for (let frame = range.startFrame; frame < range.endFrame; frame += 1) if (cost[frame - startFrame]! >= weights.heavy) heavy += 1;
+      const parts = Math.ceil(heavy / heavyMax);
+      if (parts <= 1) return [range];
+      const size = range.endFrame - range.startFrame;
+      return Array.from({ length: parts }, (_, part) => at(range.startFrame + Math.round((part * size) / parts), range.startFrame + Math.round(((part + 1) * size) / parts)));
+    });
+  }
+  return ranges;
+}
+
 export type FleetPlan = {
   targetSeconds: number;
   framesPerChunk: number;

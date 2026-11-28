@@ -8,6 +8,10 @@ Cloudflare `standard-4` on 2026-11-27 and 28.
 In this repository: `packages/core/src/planner.ts` implements the tier and fleet arithmetic as pure functions with a
 unit test. Everything else on this page is a pattern, **not built here**.
 
+`planRanges()` in the same file cuts one job into chunks: a fixed grid for Remotion, and for an engine that joins
+chunks of any length (HyperFrames here) chunks of equal cost, with a frame of a heavy range counted as four light ones
+by default. `--chunks auto` uses it. See [hyperframes-split.md](hyperframes-split.md).
+
 ## A tier is a finish time, not an instance count
 
 "Fast" should mean "ready sooner", whatever the video is. So a tier is two things:

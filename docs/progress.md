@@ -66,7 +66,9 @@ seconds: upload = bytes / measured speed, render = frames left / frames per seco
 percent of the render, download = size / measured speed. This repository's client does not upload inputs, so it shows
 the service's own number.
 
-For HyperFrames the frame count comes from the percentage the HyperFrames CLI prints (`@hf-progress` lines). It is
+For a split HyperFrames render the frame count of a chunk is the number of frames HyperFrames has captured so far
+(files in its work folder, counted once a second): HyperFrames' distributed renderer has no progress callback. For a
+render with `"split": false` it comes from the percentage the HyperFrames CLI prints (`@hf-progress` lines), which is
 coarser: the CLI reports stages, not every frame.
 
 ## Where the numbers come from

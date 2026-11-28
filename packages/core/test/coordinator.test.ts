@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createJob, progressOf, step } from '../src/coordinator.ts';
 import { EVENT_LEVELS, toTrackerEvent } from '../src/events.ts';
-import type { Fleet, JobState, Storage, TaskRequest, TaskStatus } from '../src/types.ts';
+import type { Fleet, JobState, Plan, Storage, TaskRequest, TaskStatus } from '../src/types.ts';
 
 type Behaviour = {
   /** instance never answers before this simulated time (a slow cold start) */
@@ -31,7 +31,7 @@ type Behaviour = {
 
 const TASK_MS = 4000;
 
-function simulate(behaviour: Behaviour = {}, plan = { fps: 30, durationInFrames: 360, width: 1920, height: 1080, chunkable: true }) {
+function simulate(behaviour: Behaviour = {}, plan: Plan = { fps: 30, durationInFrames: 360, width: 1920, height: 1080, chunkable: true }) {
   let now = 0;
   type SimTask = TaskStatus & { startedAt: number; doneAt: number; frames: number; request: TaskRequest };
   const instances = new Map<string, { tasks: Map<string, SimTask>; files: Map<string, string>; bootAt: number }>();
@@ -53,7 +53,7 @@ function simulate(behaviour: Behaviour = {}, plan = { fps: 30, durationInFrames:
       if (path === '/tasks' && method === 'POST') {
         const task = JSON.parse(String(init.body)) as TaskRequest;
         started.push(task);
-        const files = task.kind === 'chunk' ? [`${task.outputBase}.ts`, `${task.outputBase}.aac`] : ['out.mp4'];
+        const files = task.kind === 'chunk' ? (task.plan.chunkFiles ?? ['.ts', '.aac']).map((suffix) => `${task.outputBase}${suffix}`) : ['out.mp4'];
         if (task.kind === 'stitch') {
           for (const chunk of task.chunks!) for (const file of chunk.files) {
             if (task.download) assert.ok(stored.has(task.download[file.name]!.replace('get:', '')), `the stitcher was sent to an object nobody wrote: ${file.name}`);
@@ -209,6 +209,20 @@ test('every run writes its own files and keys; the stitcher gets the keys of the
   assert.deepEqual(stitch.chunks!.map((chunk) => chunk.files[0]!.name), ['chunk-0000-r1.ts', 'chunk-0001-r2.ts', 'chunk-0002-r1.ts', 'chunk-0003-r2.ts']);
   assert.equal(stitch.download!['chunk-0003-r2.ts'], 'get:renders/job18/chunk-0003-r2.ts');
   assert.match(job.output!.key!, /^renders\/job18\/output-s0-0$/);
+});
+
+test('an engine with its own chunk files and chunks of any length (HyperFrames): its names are presigned, chunks of equal cost (heavy ranges shorter), the stitcher gets every chunk\'s frames', async () => {
+  const plan: Plan = { fps: 30, durationInFrames: 1800, width: 1920, height: 1080, chunkable: true, chunkFiles: ['.ts', '.json'], variableChunks: true, segments: [{ startFrame: 600, endFrame: 1200, cls: 'heavy' }] };
+  const sim = simulate({}, plan);
+  const job = await sim.run(createJob('job30', request({ chunks: 'auto' })), 30 * 60_000, true);
+  assert.equal(job.phase, 'done');
+  // 2 instances x 2 processes: 4 chunks of equal cost, the two inside the heavy range a third as long as the others
+  assert.deepEqual(job.chunks.map((chunk) => chunk.endFrame - chunk.startFrame), [675, 225, 225, 675]);
+  const first = sim.started.find((task) => task.kind === 'chunk')!;
+  assert.deepEqual(Object.keys(first.upload!).sort(), [`${first.outputBase}.json`, `${first.outputBase}.ts`]);
+  const stitch = sim.started.find((task) => task.kind === 'stitch')!;
+  assert.deepEqual(stitch.chunks!.map((chunk) => [chunk.startFrame, chunk.endFrame]), job.chunks.map((chunk) => [chunk.startFrame, chunk.endFrame]));
+  assert.ok(stitch.chunks!.every((chunk) => chunk.files[1]!.name.endsWith('.json')));
 });
 
 test('an instance that restarts loses its tasks: the chunks are queued again and are not blamed for it', async () => {

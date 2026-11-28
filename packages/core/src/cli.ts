@@ -2,6 +2,7 @@
  * Engine-neutral command line. The HyperFrames example uses it directly; the Remotion package wraps the same calls.
  *
  *   node packages/core/bin/render.mjs local  --engine <engine.ts> --render '<json>' --out out.mp4 [--docker <image>] [--instances N] [--frames-per-chunk N]
+ *                                         [--chunks auto|N] [--chunk-seconds min,max[,heavyMax]] [--processes-per-instance N]
  *                                         [--stitch combine|stream|stream-fmp4] [--max-hedge-share 0.05] [--no-hedge] [--work-dir .render-work] [--keep-work]
  *   node packages/core/bin/render.mjs cloud  --render '<json>' --out out.mp4 [--instances N] [--frames-per-chunk N]      (RENDER_SERVICE_URL, RENDER_SECRET)
  *   node packages/core/bin/render.mjs progress <renderId> | delete <renderId> | info
@@ -27,12 +28,16 @@ export function parseFlags(argv: string[]): { positional: string[]; flags: Recor
   }
   return { positional, flags };
 }
+/** `--chunk-seconds 2,30` or `2,30,5`: min, max and heavy max of `--chunks auto`. */
+const chunkSeconds = (value: string) => { const [min, max, heavyMax] = value.split(',').map((part) => (part.trim() ? Number(part) : undefined)); return { ...(min ? { min } : {}), ...(max ? { max } : {}), ...(heavyMax ? { heavyMax } : {}) }; };
 export function fleetFromFlags(flags: Record<string, string | true>): FleetOptions {
   const number = (name: string) => (typeof flags[name] === 'string' ? Number(flags[name]) : undefined);
   return {
     ...(number('instances') ?? number('concurrency') ? { instances: number('instances') ?? number('concurrency') } : {}),
     ...(number('processes-per-instance') ? { processesPerInstance: number('processes-per-instance') } : {}),
     ...(number('frames-per-chunk') ? { framesPerChunk: number('frames-per-chunk') } : {}),
+    ...(flags.chunks === 'auto' ? { chunks: 'auto' as const } : number('chunks') ? { chunks: number('chunks') } : {}),
+    ...(typeof flags['chunk-seconds'] === 'string' ? { chunkSeconds: chunkSeconds(flags['chunk-seconds']) } : {}),
     ...(number('max-retries') !== undefined ? { maxRetries: number('max-retries') } : {}),
     ...(number('max-hedge-share') !== undefined ? { maxHedgeShare: number('max-hedge-share') } : {}),
     ...(flags['no-hedge'] ? { duplicateStragglers: false } : {}),

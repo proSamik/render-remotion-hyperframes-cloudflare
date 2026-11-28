@@ -7,6 +7,10 @@ In this repository: `packages/core/src/resolution.ts` turns a name into Remotion
 bitrate, and moves planner rates to another size (unit tests in `packages/core/test/resolution.test.ts`). Pass
 `scale` and `videoBitrate` to the render (`--scale`, `--video-bitrate` on the CLI).
 
+Split HyperFrames renders take the same names as `"resolution"`: above the composition's size HyperFrames
+supersamples (its `outputResolution`), below it each chunk is scaled and encoded once
+([hyperframes-split.md](hyperframes-split.md)).
+
 ## The option
 
 | Name | Short side | 16:9 output | Bitrate (30 fps, x264 `veryfast`, 1 s GOP) |

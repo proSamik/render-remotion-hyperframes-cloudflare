@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+Split rendering for pure HyperFrames videos (2026-11-28). **Ran on one Mac (up to 8 local instances) and in CI on
+Linux. Not run in Docker or on Cloudflare.**
+
+- **`packages/hyperframes-engine/split.ts`**: an MP4 HyperFrames render is cut into frame ranges like a Remotion
+  render. Each chunk is rendered by HyperFrames' own distributed renderer (`@hyperframes/producer/distributed`,
+  `planV2()` + `renderChunkV2()` with a `frameRange`, pinned to the CLI's version 0.9.103): fresh seek per frame under
+  HyperFrames' virtual-time shim, software GL, a closed GOP that starts on an IDR frame, a keyframe at least every 2 s.
+  The chunk's MP4 is rewrapped (no re-encode) as MPEG-TS at its place on the timeline; the join streams the chunks into
+  one FFmpeg, copies the video and puts HyperFrames' single audio mix of the whole timeline under it. No audio join,
+  nothing to drift. Every chunk carries a description (frames, HyperFrames' plan hash, size, SHA-256); the join refuses
+  chunks from another plan, gaps, overlaps and damaged files, and checks the frame count and the duration of the result.
+  `"split": false` keeps the old path (`hyperframes render` in one piece), which other formats always use.
+- **Coordinator**: chunks of different lengths for engines that can join them (`Plan.variableChunks`); an engine
+  names its chunk files (`Plan.chunkFiles`, default Remotion's `.ts` + `.aac`); the stitcher gets every chunk's frames.
+  Remotion's grid is unchanged (a unit test pins it).
+- **`fleet.chunks`** (`--chunks N|auto`), **`fleet.chunkSeconds`** (`--chunk-seconds min,max[,heavyMax]`),
+  **`fleet.costWeights`**: `planRanges()` in `packages/core/src/planner.ts` cuts a job into one chunk per process, 2 to
+  30 s; with variable chunks, into chunks of equal cost, so a heavy range (`data-render-cost="heavy"`, or a `<canvas>`
+  clip, in the composition's HTML) gets shorter chunks and the processes finish together.
+- **Output size** for split HyperFrames renders (`"resolution"`): HyperFrames supersamples above the composition's
+  size; below it each chunk is scaled and encoded once with the same GOP rule.
+- **`examples/hyperframes-only`**: a second, 60 s project (`long/`) with a heavy canvas scene, a frame counter and a
+  flash on every second; `npm run local:long`, `npm run compare`, `npm run compare:long`, `npm run cloud:long`.
+- **`packages/hyperframes-engine/test/compare-split.ts`**: renders a composition in one chunk and in N, and checks frame
+  count, duration, sound, SSIM of every frame (joins reported apart) and, with `--flash`, A/V sync to the frame.
+  Unit tests for the range and boundary arithmetic, the planner and the join (on synthetic FFmpeg chunks).
+- Found on the way: `-ss 0` on an AAC input with `-c:a copy` makes FFmpeg drop the priming information; the first
+  9 ms of sound came out silent. The copy path cuts with `-t` only.
+- **docs/hyperframes-split.md** (new), docs/chunking.md, README, AGENTS.md, the example's README.
+
 Output resolution and results from the prototype's final round (2026-11-28):
 
 - **`packages/core/src/resolution.ts`**: a quality name (`360p` to `2160p`, `2k`, `4k`, or the composition's size)

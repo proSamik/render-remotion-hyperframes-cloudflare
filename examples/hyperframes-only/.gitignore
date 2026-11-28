@@ -3,3 +3,6 @@ node_modules/
 .render-work/
 composition/assets/tone.wav
 composition/.hyperframes/
+long/assets/tone.wav
+long/.hyperframes/
+.render-work-compare-*/

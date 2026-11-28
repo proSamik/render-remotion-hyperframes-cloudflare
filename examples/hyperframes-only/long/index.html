@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <!--
+      A 60-second composition for split rendering: long enough that cutting it into chunks pays off, with a heavier
+      canvas scene in the middle (20 s to 40 s) that `--chunks auto` cuts into shorter chunks.
+      Every pixel is a function of timeline time: no Date.now(), no requestAnimationFrame loop, no unseeded random.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Archivo Black";
+        src: url("assets/fonts/ArchivoBlack-Regular.ttf") format("truetype");
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #0b1020; }
+      #root { position: relative; width: 1920px; height: 1080px; font-family: "Archivo Black", sans-serif; color: #f8fafc; }
+      .scene { position: absolute; inset: 0; }
+      .title { position: absolute; left: 140px; top: 120px; font-size: 96px; line-height: 1.05; }
+      .note { position: absolute; left: 146px; top: 245px; font-size: 38px; color: #94a3b8; }
+      #bars { position: absolute; left: 140px; top: 420px; width: 1640px; height: 480px; }
+      .bar { position: absolute; bottom: 0; width: 180px; height: 480px; border-radius: 16px 16px 0 0; transform-origin: 50% 100%; }
+      #field { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+      #grid { position: absolute; left: 140px; top: 360px; width: 1640px; height: 600px; }
+      .card { position: absolute; width: 150px; height: 110px; border-radius: 14px; }
+      #frame { position: absolute; right: 120px; bottom: 50px; font-size: 64px; color: #e2e8f0; }
+      #flash { position: absolute; left: 120px; bottom: 60px; width: 56px; height: 56px; border-radius: 28px; background: #fde047; opacity: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="60" data-width="1920" data-height="1080">
+      <div id="scene-bars" class="scene clip" data-start="0" data-duration="20" data-track-index="0">
+        <h1 class="title">Split rendering</h1>
+        <p class="note">One video, many chunks, joined without a re-encode</p>
+        <div id="bars"></div>
+      </div>
+      <!-- data-render-cost="heavy" tells the planner that this range costs more per frame (a <canvas> clip counts as heavy by itself). -->
+      <div id="scene-field" class="scene clip" data-start="20" data-duration="20" data-track-index="1" data-render-cost="heavy">
+        <canvas id="field" width="1920" height="1080" data-layout-allow-overflow></canvas>
+        <h1 class="title">A heavier scene</h1>
+        <p class="note">6,000 glowing particles on a 2D canvas, drawn per frame</p>
+      </div>
+      <div id="scene-grid" class="scene clip" data-start="40" data-duration="20" data-track-index="2">
+        <h1 class="title">Seeked, not played</h1>
+        <p class="note">Every frame is rendered from its own timestamp</p>
+        <div id="grid"></div>
+      </div>
+      <!-- The frame number and a flash on every whole second: a join shows as a wrong number, a sync error as a flash off its beep. -->
+      <p id="frame" class="clip" data-start="0" data-duration="60" data-track-index="3">0000</p>
+      <div id="flash" class="clip" data-start="0" data-duration="60" data-track-index="4"></div>
+      <audio id="tone" class="clip" data-start="0" data-duration="60" data-track-index="5" data-volume="1" src="assets/tone.wav"></audio>
+    </div>
+    <script>
+      // A seeded generator: the same numbers in every browser, every instance, every chunk.
+      function mulberry32(seed) { return function () { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+      const random = mulberry32(20261128);
+      const colors = ["#f97316", "#22d3ee", "#a3e635", "#f472b6", "#facc15", "#818cf8", "#34d399", "#fb7185"];
+
+      const bars = document.getElementById("bars");
+      for (let i = 0; i < 8; i += 1) { const bar = document.createElement("div"); bar.className = "bar"; bar.style.left = `${i * 207}px`; bar.style.background = colors[i]; bars.appendChild(bar); }
+      const grid = document.getElementById("grid");
+      for (let i = 0; i < 40; i += 1) { const card = document.createElement("div"); card.className = "card"; card.style.left = `${(i % 10) * 165}px`; card.style.top = `${Math.floor(i / 10) * 140}px`; card.style.background = colors[i % colors.length]; grid.appendChild(card); }
+
+      // The canvas scene: 6,000 glowing particles in a flow field, drawn from the scene's local time only.
+      const canvas = document.getElementById("field");
+      const context = canvas.getContext("2d");
+      const particles = Array.from({ length: 6000 }, () => ({ x: random() * 1920, y: random() * 1080, speed: 40 + random() * 160, phase: random() * Math.PI * 2, size: 1.5 + random() * 3.5, color: colors[Math.floor(random() * colors.length)] }));
+      function drawField(t) {
+        context.fillStyle = "#0b1020";
+        context.fillRect(0, 0, 1920, 1080);
+        // Each particle with a glow (shadowBlur) and a short trail: costly in a software rasterizer, on purpose.
+        for (const p of particles) {
+          context.shadowColor = p.color;
+          context.shadowBlur = 12;
+          context.fillStyle = p.color;
+          for (let k = 3; k >= 0; k -= 1) {
+            const at = Math.max(0, t - k * 0.04);
+            const angle = Math.sin(p.y * 0.004 + at * 0.7 + p.phase) + Math.cos(p.x * 0.003 - at * 0.5);
+            const x = (p.x + Math.cos(angle) * p.speed * at + 1920 * 4) % 1920;
+            const y = (p.y + Math.sin(angle) * p.speed * at + 1080 * 4) % 1080;
+            context.globalAlpha = (0.55 + 0.45 * Math.sin(t * 2 + p.phase)) * (1 - k * 0.22);
+            context.beginPath();
+            context.arc(x, y, p.size * (1 - k * 0.15), 0, Math.PI * 2);
+            context.fill();
+          }
+        }
+        context.shadowBlur = 0;
+        context.globalAlpha = 1;
+        // Text stays in the DOM, not on the canvas: a canvas draws with whatever font is loaded at that moment.
+      }
+
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      // Scene 1: bars that keep moving for 20 s.
+      document.querySelectorAll(".bar").forEach((bar, i) => {
+        tl.fromTo(bar, { scaleY: 0.05 }, { scaleY: 0.3 + 0.7 * random(), duration: 1.2 + 0.1 * i, ease: "sine.inOut", repeat: 15, yoyo: true }, 0.2 + i * 0.1);
+      });
+      // Scene 2: the canvas, redrawn from timeline time.
+      const field = { t: 0 };
+      tl.fromTo(field, { t: 0 }, { t: 20, duration: 20, ease: "none", onUpdate: () => drawField(field.t) }, 20);
+      // Scene 3: cards that turn and pulse.
+      document.querySelectorAll(".card").forEach((card, i) => {
+        tl.fromTo(card, { rotation: 0, scale: 0.6, opacity: 0.2 }, { rotation: 360, scale: 1, opacity: 1, duration: 2.5, ease: "power2.inOut", repeat: 6, yoyo: true }, 40 + (i % 10) * 0.12 + Math.floor(i / 10) * 0.2);
+      });
+      // Frame counter and the flash on every whole second (the test tone beeps on every whole second).
+      const clock = { t: 0 };
+      const frameText = document.getElementById("frame");
+      const flash = document.getElementById("flash");
+      tl.fromTo(clock, { t: 0 }, { t: 60, duration: 60, ease: "none", onUpdate: () => {
+        frameText.textContent = String(Math.round(clock.t * 30)).padStart(4, "0");
+        flash.style.opacity = Math.round(clock.t * 30) % 30 < 3 ? "1" : "0";
+      } }, 0);
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

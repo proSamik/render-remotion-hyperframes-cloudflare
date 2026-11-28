@@ -2,6 +2,7 @@
  * Shared types of the render coordinator, the container task server and the engines.
  * Nothing here knows about Remotion or HyperFrames: an engine turns a `RenderOptions` object into files.
  */
+import type { Segment } from './planner.ts';
 
 /** What a composition is: answered by the engine inside a container (`POST /plan`). */
 export type Plan = {
@@ -9,8 +10,21 @@ export type Plan = {
   durationInFrames: number;
   width: number;
   height: number;
-  /** false: the engine can only render the whole range in one process (HyperFrames CLI). */
+  /** false: the engine can only render the whole range in one process (a HyperFrames format other than MP4). */
   chunkable: boolean;
+  /**
+   * Suffixes of the files one chunk run writes, video first: `<outputBase><suffix>`. Default `['.ts', '.aac']`
+   * (Remotion). The coordinator presigns exactly these names and refuses a run that brings fewer files.
+   */
+  chunkFiles?: string[];
+  /**
+   * true: the engine's join takes chunks of different lengths (HyperFrames: every chunk carries absolute timestamps
+   * and the sound is mixed once for the whole timeline). Then `fleet.chunks: 'auto'` may cut heavy ranges smaller.
+   * Remotion's join needs equal chunks (except the last), so it leaves this unset.
+   */
+  variableChunks?: boolean;
+  /** Frame ranges and what a frame there costs to render (planner.ts), as far as the engine can tell without a browser. */
+  segments?: Segment[];
 };
 
 /** Engine options. Passed through untouched by the coordinator. */
@@ -29,6 +43,16 @@ export type FleetOptions = {
   processesPerInstance?: number;
   /** Chunk length in frames. Default: frames / (instances * processesPerInstance), at least `minFramesPerChunk`. */
   framesPerChunk?: number | null;
+  /**
+   * Instead of `framesPerChunk`: a number of chunks (equal lengths), or 'auto' for `planRanges()` in planner.ts:
+   * one chunk per render process, bounded by `chunkSeconds`, and, when the engine accepts chunks of different lengths
+   * (`Plan.variableChunks`), chunks of equal cost: shorter over heavy ranges (`Plan.segments`).
+   */
+  chunks?: number | 'auto' | null;
+  /** Bounds for 'auto', in seconds of video. Defaults: min 2, max 30; `heavyMax` caps the heavy seconds in one chunk. */
+  chunkSeconds?: { min?: number; max?: number; heavyMax?: number } | null;
+  /** For 'auto' with variable chunks: cost of a frame per class against a light one. Default light 1, gl 1.5, heavy 4. */
+  costWeights?: { gl?: number; heavy?: number } | null;
   /** Extra attempts per chunk after the first. Default 2. */
   maxRetries?: number;
   /** Seconds a chunk may run before it is abandoned and re-queued. Default: max(180, frames / 1.5 fps). */
@@ -80,8 +104,8 @@ export type TaskRequest = {
   /** stitch: chunk grid. */
   framesPerChunk?: number;
   chunkCount?: number;
-  /** stitch: the files of the run that won, per chunk, video first. Sizes and hashes are checked before the join. */
-  chunks?: { index: number; files: FileInfo[] }[];
+  /** stitch: the files of the run that won, per chunk, video first, with the chunk's frames (end exclusive). Sizes and hashes are checked before the join. */
+  chunks?: { index: number; files: FileInfo[]; startFrame?: number; endFrame?: number }[];
   stitch?: StitchMode;
   /** Concurrent render processes on this instance (lets the engine pick tabs per process). */
   processes?: number;

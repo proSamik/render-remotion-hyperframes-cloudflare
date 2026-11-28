@@ -1,17 +1,22 @@
 /**
- * The HyperFrames engine: one task = one run of HyperFrames' own renderer (`hyperframes render`), which drives
- * headless Chrome and FFmpeg itself. Nothing of Remotion is involved.
+ * The HyperFrames engine. Two ways to render, picked per job:
  *
- * It does not split a video into chunks. `hyperframes render` parallelises inside one machine (`--workers`), and
- * that is what one container instance gives you. Distributed HyperFrames rendering exists upstream as
- * `@hyperframes/producer/distributed` (plan / renderChunk / assemble, used by `hyperframes lambda` and
- * `hyperframes cloudrun`); wiring that into this coordinator is not done here. See docs/chunking.md.
+ *   split (default for MP4)  the video is cut into frame ranges that render on any instance and join without a
+ *                            re-encode: HyperFrames' own distributed primitives (`@hyperframes/producer/distributed`)
+ *                            per range, MPEG-TS with timestamps on the timeline, one audio mix for the whole video.
+ *                            See split.ts and docs/hyperframes-split.md.
+ *   cli                      one run of `hyperframes render` for the whole video on one instance (`"split": false`,
+ *                            and every format other than MP4: WebM and MOV with alpha, GIF, ...).
+ *
+ * Nothing of Remotion is involved.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import type { Engine, Plan } from '../core/src/types.ts';
+import { segmentsFromHtml } from './ranges.ts';
+import { ensureBrowser, loadDistributed, renderSplitChunk, renderSplitSingle, sizeFor, stitchSplit, type SplitOptions } from './split.ts';
 
 export type HyperframesRenderOptions = {
   /** Name of a project folder under HYPERFRAMES_PROJECTS_DIR (in the image: /app/projects). Default: the only one, or "composition". */
@@ -23,7 +28,18 @@ export type HyperframesRenderOptions = {
   workers?: number | 'auto';
   /** Values for the composition's `data-composition-variables`. */
   variables?: Record<string, unknown>;
+  /** false: always one `hyperframes render` on one instance. Default: split rendering for MP4. */
+  split?: boolean;
+  /** Split rendering only: output size, a name of packages/core/src/resolution.ts ("480p", "1080p", "4k") or "composition". */
+  resolution?: string;
+  /** Split rendering only: x264 CRF instead of the quality's own. */
+  crf?: number;
+  /** Split rendering only: longest gap between keyframes in seconds (default 2); every chunk also starts with one. */
+  keyframeIntervalSeconds?: number;
 };
+
+/** Split rendering applies: MP4 and not switched off. */
+export const splits = (options: HyperframesRenderOptions) => options.split !== false && (options.format ?? 'mp4') === 'mp4';
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
@@ -45,10 +61,23 @@ export function readComposition(projectDir: string, fps = 30): Plan {
   return { fps, width, height, durationInFrames: Math.round(seconds * fps), chunkable: false };
 }
 
+/** The plan the coordinator works with. Split: chunkable, two files per chunk, any chunk lengths, heavy ranges from the HTML. */
+export function planOf(projectDir: string, options: HyperframesRenderOptions): Plan {
+  const plan = readComposition(projectDir, options.fps ?? 30);
+  if (!splits(options)) return plan;
+  if (!Number.isInteger(plan.fps)) throw new Error('split rendering needs a whole-number frame rate; pass "split": false for 29.97 and the like');
+  const size = sizeFor(plan.width, plan.height, options.resolution);
+  const html = readFileSync(join(projectDir, 'index.html'), 'utf8');
+  return { ...plan, width: size.width, height: size.height, chunkable: true, chunkFiles: ['.ts', '.json'], variableChunks: true, segments: segmentsFromHtml(html, plan.fps, plan.durationInFrames) };
+}
+
+/** The `hyperframes` CLI script in the node_modules of `cliFrom`. */
+export const cliOf = (cliFrom: string) => join(dirname(createRequire(join(resolve(cliFrom), 'package.json')).resolve('hyperframes/package.json')), 'bin', 'hyperframes.mjs');
+
 /** Runs `hyperframes render`. `cliFrom` is a folder whose node_modules holds the pinned `hyperframes` package. */
 export function renderHyperframes(input: { projectDir: string; out: string; options: HyperframesRenderOptions; cliFrom: string; onProgress?: (fraction: number) => void }): Promise<void> {
   const { options } = input;
-  const cli = join(dirname(createRequire(join(resolve(input.cliFrom), 'package.json')).resolve('hyperframes/package.json')), 'bin', 'hyperframes.mjs');
+  const cli = cliOf(input.cliFrom);
   const args = [cli, 'render', input.projectDir, '--output', input.out, '--fps', String(options.fps ?? 30), '--quality', options.quality ?? 'looks', '--format', options.format ?? 'mp4',
     ...(options.workers ? ['--workers', String(options.workers)] : []), ...(options.variables ? ['--variables', JSON.stringify(options.variables)] : [])];
   return new Promise((done, failed) => {
@@ -70,18 +99,32 @@ export function renderHyperframes(input: { projectDir: string; out: string; opti
 
 export function createHyperframesEngine(): Engine {
   const cliFrom = process.env.HYPERFRAMES_CLI_DIR ?? process.cwd();
+  const split = (options: HyperframesRenderOptions) => {
+    const projectDir = projectDirOf(options);
+    const composition = readComposition(projectDir, options.fps ?? 30);
+    const splitOptions: SplitOptions = { ...(options.quality ? { quality: options.quality } : {}), ...(options.variables ? { variables: options.variables } : {}), ...(options.resolution ? { resolution: options.resolution } : {}), ...(options.keyframeIntervalSeconds ? { keyframeIntervalSeconds: options.keyframeIntervalSeconds } : {}), ...(options.crf !== undefined ? { crf: options.crf } : {}), ...(options.workers ? { workers: options.workers } : {}) };
+    return { projectDir, composition: { fps: composition.fps, width: composition.width, height: composition.height }, options: splitOptions, prepare: () => ensureBrowser(cliOf(cliFrom)) };
+  };
   return {
     async plan(render) {
       const options = render as HyperframesRenderOptions;
-      return readComposition(projectDirOf(options), options.fps ?? 30);
+      return planOf(projectDirOf(options), options);
     },
     async render({ task, dir, onProgress }) {
       const options = task.render as HyperframesRenderOptions;
+      if (splits(options)) {
+        const api = await loadDistributed(cliFrom);
+        return task.kind === 'chunk' ? renderSplitChunk({ api, task, dir, onProgress, ...split(options) }) : renderSplitSingle({ api, task, dir, onProgress, ...split(options) });
+      }
       const name = `out.${options.format ?? 'mp4'}`;
       await renderHyperframes({ projectDir: projectDirOf(options), out: join(dir, name), options, cliFrom, onProgress: (fraction) => onProgress(Math.round(fraction * task.plan.durationInFrames)) });
       return [name];
     },
-    async stitch() { throw new Error('the HyperFrames engine renders a video in one piece: there is nothing to stitch'); },
+    async stitch({ task, dir, chunks, output }) {
+      const options = task.render as HyperframesRenderOptions;
+      if (!splits(options)) throw new Error('this HyperFrames render was not split: there is nothing to stitch');
+      return stitchSplit({ api: await loadDistributed(cliFrom), task, dir, ...split(options), ...(chunks ? { feed: chunks } : {}), ...(output ? { output } : {}) });
+    },
   };
 }
 

@@ -6,7 +6,8 @@ Sandbox.
 
 - **Remotion**: server-side rendering of a composition, split into chunks over several container instances and
   joined with `combineChunks()`.
-- **HyperFrames**: its own renderer in a container.
+- **HyperFrames**: split into chunks over several container instances with HyperFrames' own distributed renderer,
+  joined without a re-encode, one audio mix for the whole video. Or its CLI in one piece.
 - **Both in one video**: a HyperFrames layer inside a Remotion composition.
 
 It is for people who write video with [Remotion](https://www.remotion.dev) or
@@ -25,7 +26,8 @@ Written and tested in November 2026 with Remotion 4.0.530, HyperFrames 0.9.103, 
 | Remotion: one instance | tested | tested | tested |
 | Remotion: chunked over instances | tested (2) | tested (2) | tested (4 instances, 12 chunks) |
 | Remotion: still, web font, WebGL | tested | WebGL tested | tested |
-| HyperFrames | tested | tested | tested |
+| HyperFrames (CLI, one piece) | tested | tested | tested |
+| HyperFrames split into chunks over instances | tested (up to 8 local instances; CI on Linux) | **not run** | **not run** |
 | Mixed | tested | tested | tested |
 | Chunks and output through R2 (Worker gateway) | | | tested |
 | Streaming join (`--stitch=stream`, `stream-fmp4`) | tested: same file as `combineChunks()` | | **not run** |
@@ -48,7 +50,7 @@ prototype's, the page says so.
 | Your video is | Example | Renderer | Chunked? |
 | --- | --- | --- | --- |
 | Pure Remotion (React components, `<Composition>`) | [`examples/remotion-only`](examples/remotion-only) | `@remotion/renderer`: `selectComposition()` + `renderMedia()` | yes, H.264 |
-| Pure HyperFrames (HTML, CSS, GSAP timeline) | [`examples/hyperframes-only`](examples/hyperframes-only) | `hyperframes render` | no: one instance per video |
+| Pure HyperFrames (HTML, CSS, GSAP timeline) | [`examples/hyperframes-only`](examples/hyperframes-only) | `@hyperframes/producer/distributed` per chunk; `hyperframes render` for other formats | yes, H.264 MP4, any chunk lengths |
 | Remotion with a HyperFrames-made layer | [`examples/mixed`](examples/mixed) | HyperFrames renders the layer to a WebM with alpha, Remotion composites it | yes, like Remotion |
 | HyperFrames with a Remotion-made layer | described in [docs/mixed.md](docs/mixed.md), not built | Remotion renders the layer, HyperFrames uses it as a `<video>` | no |
 
@@ -121,6 +123,8 @@ flowchart TD
 4. Every 1.5 seconds it polls the instances: frames done, tasks lost, deadlines passed. It re-queues what failed.
    Every run of a chunk writes its own files, so a retry or a second run can never overwrite a result.
 5. Finished chunks go to one instance (directly, or through R2; with a checksum on every hop), which joins them.
+   Remotion: `combineChunks()`. HyperFrames: the chunks' MPEG-TS byte after byte into FFmpeg, video copied, one audio
+   mix of the whole timeline under it ([docs/hyperframes-split.md](docs/hyperframes-split.md)).
 6. You poll progress, download the file, and delete the render.
 
 The coordinator is a plain state machine (`packages/core/src/coordinator.ts`, under 500 lines). The same code runs
@@ -134,7 +138,8 @@ packages/
   core/                     engine-neutral: coordinator, task server (runs in the container), Worker, client, local runner,
                             checked transfers, presigner and signing policy, multipart upload, range proxy, planner
   cloudflare-containers/    remotion-cloudflare-containers: the Remotion engine, an API shaped like @remotion/lambda, a CLI
-  hyperframes-engine/       the HyperFrames engine
+  hyperframes-engine/       the HyperFrames engine: split rendering (HyperFrames' distributed renderer per chunk, MPEG-TS
+                            join, one audio mix) and the CLI path
 examples/
   remotion-only/            compositions + Dockerfile + wrangler.jsonc
   hyperframes-only/         composition + Dockerfile + wrangler.jsonc
@@ -171,6 +176,11 @@ This repository's small examples, cold start and join included:
 | Remotion `Cube` (three.js), 20 s | 1 | 53 s | $0.0046 |
 | HyperFrames example, 8 s | 1 | 17 s | $0.0011 |
 | Mixed example, 8 s | 2 | 35 s | $0.0027 |
+
+Split HyperFrames rendering has not run on Cloudflare yet. Locally, on one 8-core Mac with local processes as
+instances, the 60 s example went from 0:52 in one chunk to 0:32 in four (light content); with a canvas scene that
+fills the CPU by itself it went from 1:50 to 1:41, because four processes on one machine share the same cores. What it
+gains on separate instances is not measured: [docs/hyperframes-split.md](docs/hyperframes-split.md#measured).
 
 Heavier, real content, measured earlier on the same platform in the private prototype this design comes from
 (render only):
@@ -261,7 +271,7 @@ Prices and statements read on 2026-11-27. We ran nothing on AWS, Google Cloud or
 | GPU | no | no | no | no |
 | GL backend | `swangle` by default | `swangle` by default | pass-through | yours to choose per chunk |
 | Fonts | Lambda layer fonts, web fonts | web fonts | web fonts | your image |
-| HyperFrames | no (HyperFrames has its own `hyperframes lambda`) | no (`hyperframes cloudrun`) | | yes, and mixed |
+| HyperFrames | no (HyperFrames has its own `hyperframes lambda`) | no (`hyperframes cloudrun`) | | yes, chunked over instances, and mixed |
 | Webhooks, expiring renders, other language clients | yes | partly | no | no |
 | Remotion licence | the same on all four | | | |
 
@@ -345,6 +355,7 @@ More: [docs/security.md](docs/security.md).
 | Topic | Page |
 | --- | --- |
 | Chunking and joins, audio included | [docs/chunking.md](docs/chunking.md) |
+| Pure HyperFrames split over instances: how, what a composition must do, measurements | [docs/hyperframes-split.md](docs/hyperframes-split.md) |
 | GL backends | [docs/gl-backends.md](docs/gl-backends.md) |
 | Fonts | [docs/fonts.md](docs/fonts.md) |
 | Cold starts and warm instances | [docs/cold-starts.md](docs/cold-starts.md) |
@@ -396,7 +407,8 @@ Honest list. Read it before you depend on this.
   existing examples use, is called deprecated in Cloudflare's docs as of November 2026.
 - **Not run:** presigned URLs against R2; `wrangler deploy` building the image on the same machine; outputs above
   100 MiB (the multipart upload ran only with its threshold lowered to 8 MiB); more than 4 instances; videos longer
-  than 90 seconds; the streaming join on anything longer than 90 frames; HyperFrames as the host of a mix; Google
+  than 90 seconds; the streaming join on anything longer than 90 frames; HyperFrames as the host of a mix; split
+HyperFrames rendering on Cloudflare or in Docker; Google
   Fonts loaded by Remotion at render time; `https://` serve URLs.
 - **Helpers that nothing here uses yet.** The multi-user signing policy, the client-side multipart upload, the range
   proxy and the planner in `packages/core` are unit-tested and documented as patterns
@@ -407,7 +419,11 @@ Honest list. Read it before you depend on this.
 - **No queue, no rate limit, no webhooks, no pool of warm instances.**
 - **One cost class.** Every chunk runs with the same number of processes per instance. Content that fills an
   instance alone (a heavy shader) should not share one; the service does not know which chunks those are.
-- **Only H.264 is chunked.** HyperFrames is not chunked at all.
+- **Only H.264 is chunked.** For HyperFrames that means MP4; WebM, MOV and the other formats render in one piece.
+- **Split HyperFrames rendering has run on one Mac and in CI, not on Cloudflare and not in Docker.** Every instance
+  plans the composition itself (2 to 3 s for the examples); a shared plan in R2 is not built. The composition must be
+  deterministic: time from the timeline, seeded randomness, fonts in the project
+  ([docs/hyperframes-split.md](docs/hyperframes-split.md)).
 - **Without R2 the output lives on one instance** for at most 15 minutes after the render.
 - **The default join needs chunks and output on one disk.** About 85 minutes of 1080p by the prototype's measurement.
   Longer needs `--stitch=stream` or `stream-fmp4`, which have not run on Cloudflare here.

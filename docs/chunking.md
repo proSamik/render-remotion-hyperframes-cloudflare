@@ -1,6 +1,6 @@
 # Chunking and joins
 
-One video is split into equal frame ranges ("chunks"). Each chunk is rendered by its own process, on any instance.
+One video is split into frame ranges ("chunks"), equal for Remotion. Each chunk is rendered by its own process, on any instance.
 One instance then joins them. This page says what makes the join seamless, for picture and for sound.
 
 ## Remotion
@@ -66,17 +66,25 @@ Earlier, with a different and longer composition, we measured 24 chunks from 8 i
 
 ## HyperFrames
 
-`hyperframes render` renders a composition on one machine and uses several browser workers there (`--workers`).
-The HyperFrames example therefore runs one render on one instance. It is not chunked by this repository.
+Pure HyperFrames videos are chunked too, since the version after 0.1.0, with HyperFrames' own distributed primitives
+(`@hyperframes/producer/distributed`, the functions behind `hyperframes lambda` and `hyperframes cloudrun`). The
+contract is different from Remotion's, and simpler:
 
-HyperFrames does have distributed rendering of its own: `@hyperframes/producer/distributed` exports `plan`,
-`renderChunk` and `assemble`, and the `hyperframes lambda` and `hyperframes cloudrun` commands are built on them
-(https://hyperframes.heygen.com, deploy section). We did not wire those functions into this coordinator and did not
-test them on Cloudflare. If you need a long HyperFrames video faster than one instance renders it, that is the place
-to start. Do not cut a HyperFrames video into `--start/--end` ranges and concatenate them yourself: nothing
-guarantees the audio joins.
+| | Remotion | HyperFrames |
+| --- | --- | --- |
+| A chunk renders | `renderMedia()` with a `frameRange` | `renderChunkV2()` with a `frameRange`: fresh seek per frame under HyperFrames' virtual-time shim |
+| Chunk video | `h264-ts`, timestamps on the timeline | closed-GOP MP4 rewrapped as MPEG-TS (no re-encode), timestamps at `startFrame / fps` |
+| Chunk audio | a padded `.aac` per chunk (`forSeamlessAacConcatenation`) | none: HyperFrames mixes the whole timeline once while it plans |
+| Second file | the `.aac` | a `.json` description: frames, plan hash, size, SHA-256 of the video |
+| Chunk lengths | equal, except the last | any: heavy ranges can get shorter chunks |
+| Join | `combineChunks()` or the streaming join | chunks byte after byte into FFmpeg, video copied, the single audio track muxed |
 
-To render many HyperFrames videos at once, start many renders. Each one gets its own instance.
+The full description, the rules a composition must follow (time from the timeline, seeded randomness, fonts in the
+project), the measurements and the limits: [hyperframes-split.md](hyperframes-split.md).
+
+Do not cut a HyperFrames video into `hyperframes render --start/--end` ranges and concatenate the files yourself:
+each file has its own audio and its own encoder settings, and nothing guarantees the joins. `"split": false` keeps the
+old way: one `hyperframes render` per video on one instance, for WebM, MOV and the other formats.
 
 ## Mixed
 

@@ -13,10 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       fontconfig fonts-liberation fonts-noto-core fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
-# The pinned HyperFrames CLI and the browser build it wants.
+# The pinned HyperFrames CLI, HyperFrames' distributed renderer (@hyperframes/producer, same version: split rendering)
+# and the browser build they want. Puppeteer's own Chrome download is skipped: HyperFrames brings chrome-headless-shell.
 WORKDIR /app/hyperframes
 COPY examples/hyperframes-only/package.json examples/hyperframes-only/package-lock.json ./
-ENV HYPERFRAMES_TELEMETRY=0 DO_NOT_TRACK=1
+ENV HYPERFRAMES_TELEMETRY=0 DO_NOT_TRACK=1 PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force \
     && node node_modules/hyperframes/bin/hyperframes.mjs browser ensure \
     && ln -s "$(find /root/.cache/hyperframes -name chrome-headless-shell -type f | head -1)" /usr/local/bin/hyperframes-chrome
@@ -28,6 +29,7 @@ ENV HYPERFRAMES_BROWSER_PATH=/usr/local/bin/hyperframes-chrome \
 
 # The composition(s) this service renders, and the task server with the HyperFrames engine.
 COPY examples/hyperframes-only/composition /app/projects/composition
+COPY examples/hyperframes-only/long /app/projects/long
 COPY packages/core/src /app/packages/core/src
 COPY packages/hyperframes-engine /app/packages/hyperframes-engine
 

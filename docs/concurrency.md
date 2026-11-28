@@ -78,4 +78,4 @@ until 15 minutes have passed without any instance.
 - Longer: as many as you allow yourself. Past about 10 s per chunk there is no reason to make chunks smaller.
 - To let the video decide instead of you: [planning.md](planning.md) (`planFleet()`), and
   [long-videos.md](long-videos.md) when chunks plus output would not fit one disk.
-- HyperFrames: 1 instance per video. See [chunking.md](chunking.md).
+- HyperFrames (MP4): the same, split into chunks ([hyperframes-split.md](hyperframes-split.md)). Other formats: 1 instance per video.

@@ -9,7 +9,7 @@ skills) and wants it rendered in the cloud, on their own Cloudflare account. Thi
 | Their code | Use | Folder |
 | --- | --- | --- |
 | Remotion only (React, `registerRoot`, `<Composition>`) | Remotion SSR, chunked | `examples/remotion-only` |
-| HyperFrames only (`index.html` with `data-composition-id`, GSAP timeline) | HyperFrames' own renderer | `examples/hyperframes-only` |
+| HyperFrames only (`index.html` with `data-composition-id`, GSAP timeline) | HyperFrames' own renderer, chunked (MP4) | `examples/hyperframes-only` |
 | Remotion with a HyperFrames-made layer | pre-render the layer, composite in Remotion | `examples/mixed` |
 
 ## Rules
@@ -66,6 +66,13 @@ node packages/cloudflare-containers/bin/remotion-cloudflare.mjs render <Composit
   --props='{"title":"Hello"}' --concurrency=4 --out=out/video.mp4
 ```
 
+HyperFrames, from `examples/hyperframes-only` (any fleet flags):
+
+```bash
+npm run local -- --chunks auto --instances 2 --processes-per-instance 2
+node ../../packages/core/bin/render.mjs cloud --render='{"project":"composition","quality":"looks"}' --chunks auto --instances 4 --out=out/video.mp4
+```
+
 Add `--webgl` when the composition uses three.js, shaders or any WebGL. For a video whose chunks plus output would
 not fit one 20 GB disk (more than about an hour of 1080p), add `--stitch=stream` and read
 [docs/long-videos.md](docs/long-videos.md) first: that path has not run on Cloudflare in this repository.
@@ -88,7 +95,8 @@ curl -s "$RENDER_SERVICE_URL/renders/r0123456789ab/output" -H "Authorization: Be
 curl -sX DELETE "$RENDER_SERVICE_URL/renders/r0123456789ab" -H "Authorization: Bearer $RENDER_SECRET"
 ```
 
-HyperFrames body: `{"render":{"project":"composition","quality":"looks"}}`.
+HyperFrames body: `{"render":{"project":"composition","quality":"looks"},"fleet":{"instances":4,"chunks":"auto"}}`.
+MP4 is split into chunks by default; `"split": false` in `render` renders in one piece with the `hyperframes` CLI.
 Compare the SHA-256 of the download with `outputSha256` from the progress.
 
 ## Putting their composition in
@@ -97,7 +105,11 @@ Compare the SHA-256 of the download with `outputSha256` from the progress.
   `wrangler.jsonc` and the scripts. Pin `remotion` and every `@remotion/*` package to the same version. Then
   `npm run local`, then `npm run deploy`. A new composition needs a new deploy: the bundle is in the image.
 - HyperFrames: replace `examples/hyperframes-only/composition` with their project folder. Run
-  `npx hyperframes check` in it first.
+  `npx hyperframes check` in it first, then `npm run compare -- --project composition`: it renders one chunk against
+  three and fails when the frames at the joins differ. A split render needs every pixel to be a function of timeline
+  time: no `Date.now()`, no state carried from frame to frame, seeded randomness, fonts as files in the project, text
+  not drawn into a `<canvas>` with a web font ([docs/hyperframes-split.md](docs/hyperframes-split.md)). Mark heavy
+  scenes with `data-render-cost="heavy"` so `--chunks auto` cuts them shorter.
 - Fonts: the container has no Mac or Windows fonts. Put font files in the project. See [docs/fonts.md](docs/fonts.md).
 - Media: files under `public/` (Remotion) or `assets/` (HyperFrames) go into the image. Remote media must be
   reachable from the container over https.

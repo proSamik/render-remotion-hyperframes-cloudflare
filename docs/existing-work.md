@@ -30,7 +30,7 @@ We found no maintained Remotion example for Fly.io, Modal or ECS in a repository
 | Project | What it does | Different from this guide |
 | --- | --- | --- |
 | [heygen-com/hyperframes-cloudflare-template](https://github.com/heygen-com/hyperframes-cloudflare-template) | Official. Composition files sent as base64 JSON in a synchronous `POST /render`; the container runs `hyperframes render --workers auto`; the Worker streams the MP4 into R2. `standard-4`. 30 stars, November 2026. | The composition arrives in the request (any caller can render any HTML); one long request; no secret. Here the composition is in the image and the render is a job you poll. |
-| `hyperframes lambda`, `hyperframes cloudrun` (in [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes)) | Official distributed rendering on AWS and GCP, built on `@hyperframes/producer/distributed` (`plan`, `renderChunk`, `assemble`). | Not Cloudflare. This is what a chunked HyperFrames render on Cloudflare should be built on; we did not build it. |
+| `hyperframes lambda`, `hyperframes cloudrun` (in [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes)) | Official distributed rendering on AWS and GCP, built on `@hyperframes/producer/distributed` (`plan`, `renderChunk`, `assemble`). | Not Cloudflare. The split HyperFrames path here is built on `planV2()` and `renderChunkV2()` from it, with this repository's coordinator and its own join ([hyperframes-split.md](hyperframes-split.md)). |
 | `hyperframes cloud render` | HeyGen's hosted renderer. | Not your own account. |
 | A few small third-party clones of the HeyGen template | | One runs as a non-root user with `enableInternet = false` and destroys the container before and after every job. |
 
@@ -48,7 +48,7 @@ Our starting point was a private prototype. Reading the above changed these thin
 | Set `enableMultiProcessOnLinux: true` and worried about `/dev/shm` | It is the default since Remotion 4.0.137, and both frameworks pass `--disable-dev-shm-usage` themselves. | Nothing to configure. |
 | Passed chunks container to Worker to container, with checksums, and treated R2 as "later" | odysseas lets the container talk to R2 through a Worker outbound handler: no credentials in the container, nothing through the coordinator. Cloudflare documents the pattern. | Implemented the same with the new API (`interceptOutboundHttp` + a `WorkerEntrypoint`) and tested it. The checksummed route stays as the no-R2 fallback. |
 | Used the `Container` class of `@cloudflare/containers` | So does every existing example. | Cloudflare's docs call the class deprecated since November 2026. This guide uses `ctx.container` with the `durable_object` scheduling policy instead. None of the projects above did when we read them. |
-| Pinned HyperFrames' producer and called it from our own code | The official template just runs the `hyperframes render` CLI. | We run the CLI. |
+| Pinned HyperFrames' producer and called it from our own code | The official template just runs the `hyperframes render` CLI. | We ran the CLI. Split rendering now calls the producer's public distributed API (`@hyperframes/producer/distributed`), pinned to the CLI's version. |
 | Assumed a Docker image that works in Docker works on Cloudflare | | It did not for HyperFrames: on Cloudflare it refused its browser cache. `HYPERFRAMES_BROWSER_PATH` fixes it. Found by testing, not by reading. |
 
 ## Where we kept our own way, and why
@@ -72,4 +72,4 @@ Our starting point was a private prototype. Reading the above changed these thin
   recommends and odysseas does. Each chunk calls `selectComposition()` again here. It costs a little time per chunk.
 - A warm browser kept open in the container between tasks. Every task starts a fresh browser, so a crash cannot leak
   into the next task; it costs 3 to 7 seconds per chunk.
-- `@hyperframes/producer/distributed` for chunked HyperFrames rendering.
+- Plan v2 of `@hyperframes/producer/distributed` published once to R2 (`planV2WithPublisher()`), instead of every instance planning the composition itself.

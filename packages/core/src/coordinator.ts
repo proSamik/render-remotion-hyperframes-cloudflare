@@ -17,7 +17,8 @@
  *   - a slow run: a second run ("hedge") only for a chunk that is measurably slow, once per chunk, for a small share
  *     of the chunks. Every run writes its own files, so a run that finishes late cannot overwrite the one that won.
  */
-import type { ChunkRun, ChunkState, EventKind, Fleet, FileInfo, InstanceState, JobRequest, JobState, RenderProgress, Storage, TaskRequest, TaskStatus } from './types.ts';
+import { classOfRange, planRanges, type ChunkRange } from './planner.ts';
+import type { ChunkRun, ChunkState, EventKind, Fleet, FileInfo, FleetOptions, InstanceState, JobRequest, JobState, Plan, RenderProgress, Storage, TaskRequest, TaskStatus } from './types.ts';
 
 /** Cloudflare Containers list prices (developers.cloudflare.com/containers/platform/pricing, read 2026-11-27). */
 export const PRICES = { vcpuSecond: 0.00002, gibSecond: 0.0000025, diskGbSecond: 0.00000007 };
@@ -58,6 +59,8 @@ const settings = (job: JobState) => {
   };
 };
 
+/** What one chunk run writes, video first (Remotion's two files unless the engine says otherwise). */
+const chunkFiles = (plan: Plan | undefined) => (plan?.chunkFiles?.length ? plan.chunkFiles : ['.ts', '.aac']);
 const chunkName = (index: number) => `chunk-${String(index).padStart(4, '0')}`;
 /** Where a file of a render lives in object storage. Every run has its own file names, so every run has its own keys. */
 export const objectKey = (jobId: string, name: string) => `renders/${jobId}/${name}`;
@@ -154,16 +157,37 @@ async function planning(job: JobState, fleet: Fleet, now: number) {
   job.plan = plan;
   job.startFrame = Math.max(0, Math.min(plan.durationInFrames - 1, range[0]!));
   job.endFrame = Math.max(job.startFrame + 1, Math.min(plan.durationInFrames, range[1]! + 1));
-  const frames = job.endFrame - job.startFrame;
-  const wanted = job.request.fleet?.framesPerChunk ?? Math.ceil(frames / (config.instances * config.processes));
-  job.framesPerChunk = Math.max(MIN_FRAMES_PER_CHUNK, Math.floor(wanted));
-  job.single = still || !plan.chunkable || frames <= job.framesPerChunk;
-  if (job.single) job.framesPerChunk = frames;
-  job.chunks = [];
-  for (let index = 0, from = job.startFrame; from < job.endFrame; index += 1, from += job.framesPerChunk) {
-    job.chunks.push({ index, startFrame: from, endFrame: Math.min(job.endFrame, from + job.framesPerChunk), state: 'pending', attempts: 0, lost: 0, runsStarted: 0, runs: [], transferAttempts: 0 });
-  }
+  const ranges = chunkRanges(plan, job.startFrame, job.endFrame, job.request.fleet ?? {}, config.instances * config.processes);
+  job.single = still || !plan.chunkable || ranges.length <= 1;
+  job.framesPerChunk = job.single ? job.endFrame - job.startFrame : ranges[0]!.endFrame - ranges[0]!.startFrame;
+  job.chunks = (job.single ? [{ startFrame: job.startFrame, endFrame: job.endFrame }] : ranges).map((range, index) => ({ index, startFrame: range.startFrame, endFrame: range.endFrame, state: 'pending', attempts: 0, lost: 0, runsStarted: 0, runs: [], transferAttempts: 0 }));
   job.phase = 'rendering';
+}
+
+/**
+ * The job's chunks. `fleet.chunks`: a number gives that many equal chunks; 'auto' asks planRanges() (one chunk per
+ * render process, bounded; chunks of equal cost, so heavy ranges shorter, when the engine joins chunks of any length). Otherwise
+ * `framesPerChunk`, or frames / (instances x processes). Never shorter than 30 frames: below that the start-up of a
+ * chunk costs more than its frames. Without `Plan.variableChunks` every chunk has the same length except the last.
+ */
+export function chunkRanges(plan: Plan, startFrame: number, endFrame: number, fleet: FleetOptions, processes: number): ChunkRange[] {
+  const frames = endFrame - startFrame;
+  const variable = Boolean(plan.variableChunks);
+  if (fleet.chunks === 'auto') {
+    const bounds = fleet.chunkSeconds ?? {};
+    const minSeconds = Math.max(MIN_FRAMES_PER_CHUNK / plan.fps, bounds.min ?? 2);
+    return planRanges({ startFrame, endFrame, fps: plan.fps, segments: plan.segments, targetChunks: processes, minSeconds, ...(bounds.max ? { maxSeconds: bounds.max } : {}), ...(bounds.heavyMax ? { heavyMaxSeconds: bounds.heavyMax } : {}), ...(fleet.costWeights ? { weights: fleet.costWeights } : {}), variable });
+  }
+  const count = typeof fleet.chunks === 'number' && fleet.chunks >= 1 ? Math.floor(fleet.chunks) : null;
+  const wanted = count ? Math.ceil(frames / count) : fleet.framesPerChunk ?? Math.ceil(frames / processes);
+  const length = Math.max(MIN_FRAMES_PER_CHUNK, Math.floor(wanted));
+  // Equal parts when the join allows it (no short last chunk); the fixed grid of Remotion otherwise.
+  if (variable && count) {
+    const parts = Math.max(1, Math.min(count, Math.floor(frames / MIN_FRAMES_PER_CHUNK)));
+    return Array.from({ length: parts }, (_, part) => ({ startFrame: startFrame + Math.round((part * frames) / parts), endFrame: startFrame + Math.round(((part + 1) * frames) / parts), cls: 'light' as const }))
+      .map((range) => ({ ...range, cls: classOfRange(plan.segments, range.startFrame, range.endFrame) }));
+  }
+  return planRanges({ startFrame, endFrame, fps: plan.fps, segments: plan.segments, targetChunks: Math.ceil(frames / length), minSeconds: length / plan.fps, maxSeconds: length / plan.fps, variable: false });
 }
 
 const deadlineSeconds = (job: JobState, chunk: ChunkState) => job.request.fleet?.chunkDeadlineSeconds ?? Math.max(300, (chunk.endFrame - chunk.startFrame) / 1.5);
@@ -190,7 +214,7 @@ async function poll(job: JobState, fleet: Fleet, now: number): Promise<Map<strin
 
 /** A finished chunk task must bring what was asked for, or it is treated as a failed run. */
 function refusal(job: JobState, task: TaskStatus): string | null {
-  const wanted = job.single ? 1 : 2;
+  const wanted = job.single ? 1 : chunkFiles(job.plan).length;
   if (task.files.length < wanted) return `${task.files.length} files instead of ${wanted}`;
   if (!job.single && !(task.files[0]!.bytes > 0)) return 'empty video file';
   return null;
@@ -274,7 +298,7 @@ async function rendering(job: JobState, fleet: Fleet, storage: Storage | null, n
     const base = job.single ? null : `${chunkName(chunk.index)}-r${run}`;
     const taskId = `${job.id}-${chunkName(chunk.index)}-r${run}`;
     const upload: Record<string, string> = {};
-    if (storage && base) for (const name of [`${base}.ts`, `${base}.aac`]) upload[name] = await storage.presignPut(objectKey(job.id, name));
+    if (storage && base) for (const name of chunkFiles(plan).map((suffix) => `${base}${suffix}`)) upload[name] = await storage.presignPut(objectKey(job.id, name));
     if (storage && !base) upload['*'] = await storage.presignPut(objectKey(job.id, `output-r${run}`));
     const task: TaskRequest = {
       id: taskId, jobId: job.id, kind: job.request.render.type === 'still' ? 'still' : job.single ? 'single' : 'chunk', render: job.request.render, plan,
@@ -408,7 +432,7 @@ async function stitching(job: JobState, fleet: Fleet, storage: Storage | null, n
     // The stitcher is told which run of every chunk won, with size and hash: it checks each file before it joins it.
     const task: TaskRequest = {
       id, jobId: job.id, kind: 'stitch', render: job.request.render, plan: job.plan!, startFrame: job.startFrame, endFrame: job.endFrame, framesPerChunk: job.framesPerChunk, chunkCount: job.chunks.length,
-      chunks: job.chunks.map((chunk) => ({ index: chunk.index, files: chunk.files! })), stitch: settings(job).stitch, ...(storage ? { download, upload } : {}),
+      chunks: job.chunks.map((chunk) => ({ index: chunk.index, files: chunk.files!, startFrame: chunk.startFrame, endFrame: chunk.endFrame })), stitch: settings(job).stitch, ...(storage ? { download, upload } : {}),
     };
     try {
       const response = await call(fleet, stitcher.name, '/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(task) });

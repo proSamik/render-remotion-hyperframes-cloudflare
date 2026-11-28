@@ -3,18 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Pure HyperFrames: an HTML composition rendered by HyperFrames' own renderer, locally and on Cloudflare Containers.",
+  "description": "Pure HyperFrames: an HTML composition rendered locally and on Cloudflare Containers, split into chunks over instances (HyperFrames' distributed renderer) or in one piece (the hyperframes CLI).",
   "dependencies": {
+    "@hyperframes/producer": "0.9.103",
     "hyperframes": "0.9.103"
   },
   "scripts": {
-    "assets": "node ../../packages/core/scripts/make-tone.mjs composition/assets/tone.wav 8",
-    "check": "cd composition && hyperframes check",
+    "assets": "node ../../packages/core/scripts/make-tone.mjs composition/assets/tone.wav 8 && node ../../packages/core/scripts/make-tone.mjs long/assets/tone.wav 60",
+    "check": "cd composition && hyperframes check && cd ../long && hyperframes check",
     "preview": "cd composition && hyperframes preview",
     "local": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/render.mjs local --engine=../../packages/hyperframes-engine/engine.ts --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/local.mp4",
+    "local:cli": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/render.mjs local --engine=../../packages/hyperframes-engine/engine.ts --render='{\"project\":\"composition\",\"quality\":\"draft\",\"split\":false}' --out=out/local-cli.mp4",
+    "local:long": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/render.mjs local --engine=../../packages/hyperframes-engine/engine.ts --render='{\"project\":\"long\",\"quality\":\"draft\"}' --chunks auto --instances 2 --processes-per-instance 2 --out=out/long.mp4",
+    "compare": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/with-typescript-run.mjs ../../packages/hyperframes-engine/test/compare-split.ts --project composition --chunks 3",
+    "compare:long": "npm run assets && HYPERFRAMES_PROJECTS_DIR=. HYPERFRAMES_CLI_DIR=. node ../../packages/core/bin/with-typescript-run.mjs ../../packages/hyperframes-engine/test/compare-split.ts --project long --chunks 4 --flash 120,964,56 --min-ssim 0.98",
     "docker:build": "npm run assets && docker build --platform linux/amd64 -f Dockerfile -t rrh-hyperframes-only ../..",
     "docker": "node ../../packages/core/bin/render.mjs local --docker=rrh-hyperframes-only --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/docker.mp4",
     "deploy": "npm run assets && wrangler deploy",
-    "cloud": "node ../../packages/core/bin/render.mjs cloud --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/cloud.mp4"
+    "cloud": "node ../../packages/core/bin/render.mjs cloud --render='{\"project\":\"composition\",\"quality\":\"draft\"}' --out=out/cloud.mp4",
+    "cloud:long": "node ../../packages/core/bin/render.mjs cloud --render='{\"project\":\"long\",\"quality\":\"draft\"}' --chunks auto --instances 4 --out=out/cloud-long.mp4"
   }
 }
