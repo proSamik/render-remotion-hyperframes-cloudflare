@@ -27,6 +27,8 @@ export type LocalFleetOptions = {
   dockerImage?: string;
   dockerArgs?: string[];
   workDir: string;
+  /** Leave the instances' work folders (chunks, output) in `workDir` after the render. For looking at chunks. */
+  keepWork?: boolean;
 };
 
 export function createLocalFleet(options: LocalFleetOptions): Fleet & { close(): Promise<void>; startError: Error | null } {
@@ -51,7 +53,7 @@ export function createLocalFleet(options: LocalFleetOptions): Fleet & { close():
     const instance = await pending.catch(() => null);
     if (instance?.container) await run('docker', ['rm', '-f', instance.container]).catch(() => undefined);
     instance?.child?.kill('SIGTERM');
-    if (!options.dockerImage) await rm(join(options.workDir, name), { recursive: true, force: true }).catch(() => undefined);
+    if (!options.dockerImage && !options.keepWork) await rm(join(options.workDir, name), { recursive: true, force: true }).catch(() => undefined);
   };
   const fleet = {
     startError: null as Error | null,

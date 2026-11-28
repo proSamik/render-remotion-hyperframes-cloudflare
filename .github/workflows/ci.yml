@@ -35,7 +35,7 @@ jobs:
           npx tsc --noEmit -p packages/core/worker/tsconfig.json
           npm --prefix examples/remotion-only run typecheck
           npm --prefix examples/mixed run typecheck
-      - name: Unit tests (coordinator against a simulated fleet)
+      - name: Unit tests (coordinator against a simulated fleet, transfers and uploads against a store in memory)
         run: npm test
       # Tiny renders: a few frames at a quarter of the size. They prove the whole path runs, not that it is fast.
       - name: Remotion example, chunked on two local instances
@@ -44,6 +44,23 @@ jobs:
           npm run site
           node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Shapes --local --frames=0-89 --scale=0.25 --concurrency=2 --processes-per-instance=1 --frames-per-chunk=30 --out=out/ci.mp4
           node ../../packages/core/scripts/verify.mjs out/ci.mp4 --frames 90 --joins 30,60 --tone
+      # The streaming join must give what combineChunks() gives. One render keeps its chunks; they are then joined three
+      # ways: the MP4 must be the same file byte for byte, the fragmented MP4 must have the same packets.
+      - name: Remotion example, streaming join against combineChunks()
+        working-directory: examples/remotion-only
+        run: |
+          node ../../packages/cloudflare-containers/bin/remotion-cloudflare.mjs render Shapes --local --frames=0-89 --scale=0.25 --concurrency=2 --processes-per-instance=1 --frames-per-chunk=30 --stitch=stream-fmp4 --work-dir=.render-work-ci --keep-work --out=out/ci-fmp4.mp4
+          node ../../packages/core/scripts/verify.mjs out/ci-fmp4.mp4 --frames 90 --joins 30,60 --tone
+          node ../../packages/core/bin/with-typescript-run.mjs ../../packages/cloudflare-containers/scripts/compare-joins.ts .render-work-ci --fps 30 --frames-per-chunk 30 --frames 90
+      # Storage mode without Cloudflare: a store in memory stands in for R2, once behind the gateway protocol with a
+      # streamed fragmented MP4, once with presigned URLs. Per-run keys, checked uploads, the join fetching its chunks.
+      - name: Remotion example, chunks and output through object storage (stand-in)
+        working-directory: examples/remotion-only
+        run: |
+          node ../../packages/core/bin/with-typescript-run.mjs ../../packages/core/test/e2e-storage.ts gateway stream-fmp4 out/ci-gateway.mp4
+          node ../../packages/core/scripts/verify.mjs out/ci-gateway.mp4 --frames 90 --joins 30,60 --tone
+          node ../../packages/core/bin/with-typescript-run.mjs ../../packages/core/test/e2e-storage.ts presigned combine out/ci-presigned.mp4
+          node ../../packages/core/scripts/verify.mjs out/ci-presigned.mp4 --frames 90 --joins 30,60 --tone
       - name: HyperFrames example
         working-directory: examples/hyperframes-only
         run: |

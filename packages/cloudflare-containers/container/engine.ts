@@ -4,15 +4,17 @@
  *   plan    selectComposition()
  *   render  renderMedia() for a whole video, or for one chunk using Remotion's distributed-rendering contract
  *           (https://www.remotion.dev/docs/distributed-rendering), or renderStill()
- *   stitch  combineChunks()
+ *   stitch  combineChunks(), or the streaming join of ./streaming-stitch.ts (`fleet.stitch: 'stream' | 'stream-fmp4'`)
  *
  * `@remotion/renderer` is loaded from the project (REMOTION_PROJECT_DIR), so the version is the one your
  * composition was written and bundled with.
  */
+import { spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Engine, Plan, TaskRequest } from '../../core/src/types.ts';
+import { streamingStitch } from './streaming-stitch.ts';
 
 /** Options of one render. Names follow renderMediaOnLambda() where the idea is the same. */
 export type RemotionRenderOptions = {
@@ -139,7 +141,8 @@ export function createRemotionEngine(hooks: Hooks = {}): Engine {
         }
         const chunk = task.kind === 'chunk';
         const codec = render.codec ?? 'h264';
-        const base = chunk ? `chunk-${String(task.chunkIndex ?? 0).padStart(4, '0')}` : 'out';
+        // The coordinator names the files of every run (`chunk-0003-r2`): a late run can never overwrite the one that won.
+        const base = chunk ? task.outputBase ?? `chunk-${String(task.chunkIndex ?? 0).padStart(4, '0')}` : 'out';
         const extension = chunk ? 'ts' : ({ h264: 'mp4', h265: 'mp4', vp8: 'webm', vp9: 'webm', prores: 'mov', gif: 'gif', mp3: 'mp3', aac: 'aac', wav: 'wav' } as Record<string, string>)[codec] ?? 'mp4';
         const video = `${base}.${extension}`;
         const audio = `${base}.aac`;
@@ -183,15 +186,30 @@ export function createRemotionEngine(hooks: Hooks = {}): Engine {
       } finally { await browser.close({ silent: true }).catch(() => undefined); }
     },
 
-    async stitch({ task, dir }): Promise<string[]> {
-      const names = Array.from({ length: task.chunkCount ?? 0 }, (_, index) => `chunk-${String(index).padStart(4, '0')}`);
+    async stitch({ task, dir, chunks, output }): Promise<string[]> {
+      // Which files to join: the run of every chunk that won, as the coordinator recorded it.
+      const files = task.chunks ? [...task.chunks].sort((a, b) => a.index - b.index).map((chunk) => ({ video: chunk.files[0]!.name, audio: chunk.files[1]!.name }))
+        : Array.from({ length: task.chunkCount ?? 0 }, (_, index) => `chunk-${String(index).padStart(4, '0')}`).map((name) => ({ video: `${name}.ts`, audio: `${name}.aac` }));
       const startFrame = task.startFrame ?? 0;
       const endFrame = task.endFrame ?? task.plan.durationInFrames;
+      if (chunks && task.stitch && task.stitch !== 'combine') {
+        // Remotion's own FFmpeg, started the way Remotion starts it (next to its libraries).
+        const internals = (renderer() as any).RenderInternals;
+        const binary = internals.getExecutablePath({ type: 'ffmpeg', indent: false, logLevel: 'error', binariesDirectory: null }) as string;
+        const cwd = dirname(binary);
+        const version = projectRequire('@remotion/renderer/package.json').version as string;
+        await streamingStitch({
+          ffmpeg: (args, stdio) => spawn(binary, args, { cwd, stdio, env: process.platform === 'darwin' ? { ...process.env, DYLD_LIBRARY_PATH: cwd } : process.env }),
+          dir, chunks: files, feed: chunks, fps: task.plan.fps, framesPerChunk: task.framesPerChunk!, frames: endFrame - startFrame,
+          mode: task.stitch === 'stream-fmp4' ? 'fmp4' : 'mp4', outputName: 'out.mp4', ...(output ? { output } : {}), comment: `comment=Made with Remotion ${version}`,
+        });
+        return ['out.mp4'];
+      }
       const whole = startFrame === 0 && endFrame === task.plan.durationInFrames;
       await renderer().combineChunks({
         outputLocation: join(dir, 'out.mp4'),
-        videoFiles: names.map((name) => join(dir, `${name}.ts`)),
-        audioFiles: names.map((name) => join(dir, `${name}.aac`)),
+        videoFiles: files.map((file) => join(dir, file.video)),
+        audioFiles: files.map((file) => join(dir, file.audio)),
         codec: 'h264', audioCodec: 'aac', fps: task.plan.fps, framesPerChunk: task.framesPerChunk!,
         compositionDurationInFrames: task.plan.durationInFrames, frameRange: whole ? null : [startFrame, endFrame - 1],
         preferLossless: false, logLevel: 'error',

@@ -8,21 +8,28 @@
  *   DELETE /tasks/<id>             -> kills the task
  *   GET    /files/<job>/<name>     -> bytes (Content-Length set)
  *   PUT    /files/<job>/<name>     -> stores the body, answers { name, bytes, sha256 }: the receipt the sender compares
+ *
+ * `cpuSeconds` of `GET /tasks` is the instance's own busy counter since the server started. Bill from that, not from
+ * the sum of the tasks: two tasks that share the instance each see the other's CPU.
  *   DELETE /jobs/<job>             -> removes the job's files
+ *
+ * Optional self-test: when RENDER_SELFTEST is set (a command, for example the WebGL check of ../scripts/webgl-selftest.mjs),
+ * it runs once at start. Until it has ended with code 0 every route answers 503, so the coordinator treats the instance
+ * as not ready and gives it no work. A failed self-test is not repeated: the instance stays 503 until it is replaced.
  *
  * It never trusts a path from a request: job ids and file names are matched against a strict pattern.
  * No authentication here: the port is only reachable through the Worker, which checks the secret.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { exec, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, readFileSync } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { cpus } from 'node:os';
 import { dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { downloadVerified, hashFile, putFile } from './transfer.ts';
 import type { FileInfo, TaskRequest, TaskStatus } from './types.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -42,14 +49,16 @@ function cpuBusySeconds(): number {
 }
 const cpuAtStart = cpuBusySeconds();
 
+// 'passed' at once when no self-test is configured.
+const selftest = { state: process.env.RENDER_SELFTEST ? 'running' : 'passed' as 'running' | 'passed' | 'failed', output: '' };
+if (process.env.RENDER_SELFTEST) exec(process.env.RENDER_SELFTEST, { timeout: 120_000 }, (error, stdout, stderr) => {
+  selftest.state = error ? 'failed' : 'passed';
+  selftest.output = `${stdout}${stderr}`.slice(-2000);
+  console.log(`self-test ${selftest.state}${error ? `: ${selftest.output}` : ''}`);
+});
+
 type Task = { request: TaskRequest; status: TaskStatus; child?: ChildProcess; dir: string; startedAt: number; cpuAtStart: number };
 const tasks = new Map<string, Task>();
-
-async function sha256File(path: string): Promise<string> {
-  const hash = createHash('sha256');
-  await pipeline(createReadStream(path), hash);
-  return hash.digest('hex');
-}
 
 function runProcess(request: object, dir: string, name: string, onChild?: (child: ChildProcess) => void): Promise<{ code: number | null; result: any; stderr: string }> {
   return new Promise((resolve) => {
@@ -72,53 +81,37 @@ function runProcess(request: object, dir: string, name: string, onChild?: (child
 
 const killTree = (child?: ChildProcess) => { if (child?.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } } };
 
-// Files above this size are uploaded in parts. RENDER_MULTIPART_ABOVE_MIB exists so the multipart path can be tested with a small file.
-const MULTIPART_ABOVE = Number(process.env.RENDER_MULTIPART_ABOVE_MIB ?? 90) * 1024 * 1024;
-// R2 wants every part except the last to have the same size, at least 5 MiB.
-const PART_BYTES = Math.max(5, Math.min(64, Number(process.env.RENDER_MULTIPART_ABOVE_MIB ?? 64))) * 1024 * 1024;
-/** Uploads a result. Above 90 MiB it goes in parts (the R2 gateway of ../worker speaks this small protocol): a request body through a Worker is limited to 100 MiB. */
-async function putTo(url: string, path: string, bytes: number) {
-  const fail = async (response: Response) => { throw new Error(`upload failed: ${response.status} ${(await response.text()).slice(0, 300)}`); };
-  const send = (target: string, start: number, end: number) => fetch(target, { method: 'PUT', body: Readable.toWeb(createReadStream(path, { start, end: end - 1 })) as any, headers: { 'content-length': String(end - start) }, duplex: 'half' } as RequestInit);
-  if (bytes <= MULTIPART_ABOVE || !url.startsWith('http://r2.internal/')) {
-    const response = await send(url, 0, bytes);
-    if (!response.ok) await fail(response);
-    return;
-  }
-  const created = await fetch(`${url}?uploads`, { method: 'POST' });
-  if (!created.ok) await fail(created);
-  const { uploadId } = (await created.json()) as { uploadId: string };
-  const parts: unknown[] = [];
-  for (let start = 0, partNumber = 1; start < bytes; start += PART_BYTES, partNumber += 1) {
-    const response = await send(`${url}?uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`, start, Math.min(bytes, start + PART_BYTES));
-    if (!response.ok) await fail(response);
-    parts.push(await response.json());
-  }
-  const completed = await fetch(`${url}?uploadId=${encodeURIComponent(uploadId)}`, { method: 'POST', body: JSON.stringify(parts), headers: { 'content-type': 'application/json' } });
-  if (!completed.ok) await fail(completed);
-}
-
 async function runTask(task: Task) {
   const { request, status, dir } = task;
   try {
     await mkdir(dir, { recursive: true });
-    // Storage mode, stitch: fetch every chunk first.
-    for (const [name, url] of Object.entries(request.download ?? {})) {
-      if (!SAFE.test(name)) throw new Error(`bad file name ${name}`);
-      const response = await fetch(url);
-      if (!response.ok || !response.body) throw new Error(`download ${name}: ${response.status}`);
-      await pipeline(Readable.fromWeb(response.body as any), createWriteStream(join(dir, name)));
-    }
+    // Storage mode, join with every chunk on disk: fetch the chunks first, several at a time. Each one is compared with
+    // the size and SHA-256 recorded where it was rendered before it gets its name. A streaming join fetches its own
+    // chunks while it runs (chunk-feed.ts), so nothing is fetched here.
+    const streaming = request.kind === 'stitch' && (request.stitch ?? 'combine') !== 'combine';
+    const wanted = streaming ? [] : Object.entries(request.download ?? {});
+    const recorded = new Map((request.chunks ?? []).flatMap((chunk) => chunk.files).map((file) => [file.name, file]));
+    for (const [name] of wanted) if (!SAFE.test(name)) throw new Error(`bad file name ${name}`);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(8, wanted.length) }, async () => {
+      for (let index = next++; index < wanted.length; index = next++) {
+        const [name, url] = wanted[index]!;
+        const file = recorded.get(name);
+        await downloadVerified(url, join(dir, name), file ? { bytes: file.bytes, sha256: file.sha256 } : {});
+      }
+    }));
     const run = await runProcess({ task: request }, dir, request.id, (child) => { task.child = child; });
     if (run.code !== 0 || !run.result?.files) throw new Error(run.result?.error ?? `task process ended with code ${run.code}: ${run.stderr.slice(-1500)}`);
-    const files: FileInfo[] = [];
-    for (const name of run.result.files as string[]) files.push({ name, bytes: (await stat(join(dir, name))).size, sha256: await sha256File(join(dir, name)) });
+    // A streamed output was uploaded while it was written: it is not on the disk and comes with its own receipt.
+    const streamed = run.result.uploaded as FileInfo[] | undefined;
+    const files: FileInfo[] = streamed ?? [];
+    if (!streamed) for (const name of run.result.files as string[]) files.push(await hashFile(join(dir, name), name));
     status.files = files;
     status.framesRendered = (request.endFrame ?? 0) - (request.startFrame ?? 0);
     status.wallSeconds = (Date.now() - task.startedAt) / 1000;
     status.cpuSeconds = cpuBusySeconds() - task.cpuAtStart;
     if (request.upload) {
-      for (const file of files) { const url = request.upload[file.name] ?? request.upload['*']; if (url) await putTo(url, join(dir, file.name), file.bytes); }
+      if (!streamed) for (const file of files) { const url = request.upload[file.name] ?? request.upload['*']; if (url) await putFile(url, join(dir, file.name), file); }
       status.uploaded = true;
     }
     status.state = 'done';
@@ -145,6 +138,7 @@ const server = createServer(async (request, response) => {
     const parts = url.pathname.split('/').filter(Boolean);
     const method = request.method ?? 'GET';
     if (parts.some((part) => !SAFE.test(part))) return send(response, 400, { error: 'bad path' });
+    if (selftest.state !== 'passed') return send(response, 503, { error: 'not ready', selftest: selftest.state, ...(selftest.state === 'failed' ? { output: selftest.output } : {}) });
     if (method === 'GET' && parts[0] === 'health') return send(response, 200, { ok: true, startedAt, vcpus: cpus().length, tasks: tasks.size });
     if (method === 'POST' && parts[0] === 'plan') {
       const dir = join(WORK, '_plan');
@@ -155,6 +149,9 @@ const server = createServer(async (request, response) => {
     if (parts[0] === 'tasks' && method === 'POST') {
       const body = (await readJson(request)) as TaskRequest;
       if (!SAFE.test(body.id ?? '') || !SAFE.test(body.jobId ?? '')) return send(response, 400, { error: 'bad id' });
+      // File names in a task end up in paths: the same strict pattern as everywhere else.
+      const named = [...(body.outputBase === undefined ? [] : [body.outputBase]), ...(body.chunks ?? []).flatMap((chunk) => chunk.files.map((file) => file.name))];
+      if (named.some((name) => !SAFE.test(String(name)))) return send(response, 400, { error: 'bad file name' });
       if (!tasks.has(body.id)) {
         const task: Task = { request: body, dir: join(WORK, body.jobId), startedAt: Date.now(), cpuAtStart: cpuBusySeconds(), status: { id: body.id, kind: body.kind, state: 'running', framesRendered: 0, files: [] } };
         tasks.set(body.id, task);
@@ -184,7 +181,9 @@ const server = createServer(async (request, response) => {
         const hash = createHash('sha256');
         let bytes = 0;
         request.on('data', (chunk: Buffer) => { hash.update(chunk); bytes += chunk.length; });
-        await pipeline(request, createWriteStream(path));
+        // Written under another name first: a reader never sees half a file, and an upload that breaks leaves nothing behind.
+        const part = `${path}.${process.hrtime.bigint()}.part`;
+        try { await pipeline(request, createWriteStream(part)); await rename(part, path); } catch (error) { await rm(part, { force: true }); throw error; }
         return send(response, 200, { name: parts[2], bytes, sha256: hash.digest('hex') });
       }
     }

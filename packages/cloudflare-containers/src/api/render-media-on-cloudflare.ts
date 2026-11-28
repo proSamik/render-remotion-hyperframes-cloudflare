@@ -5,7 +5,7 @@ import type { RenderMediaOnCloudflareInput, RenderMediaOnCloudflareOutput } from
 
 /** Splits the input into what the engine gets (`render`) and what the coordinator gets (`fleet`). */
 export function toJobRequest(input: RenderMediaOnCloudflareInput, type: 'media' | 'still' = 'media'): JobRequest {
-  const { serviceUrl: _url, secret: _secret, concurrency, processesPerInstance, framesPerChunk, maxRetries, chunkDeadlineInSeconds, duplicateStragglers, ...render } = input;
+  const { serviceUrl: _url, secret: _secret, concurrency, processesPerInstance, framesPerChunk, maxRetries, chunkDeadlineInSeconds, duplicateStragglers, maxHedgeShare, stitch, ...render } = input;
   // Input props travel as JSON in the request body. They are not uploaded to a bucket first, as Lambda does above 200 kB.
   JSON.stringify(render.inputProps ?? {});
   return {
@@ -13,6 +13,7 @@ export function toJobRequest(input: RenderMediaOnCloudflareInput, type: 'media' 
     fleet: {
       ...(concurrency ? { instances: concurrency } : {}), ...(processesPerInstance ? { processesPerInstance } : {}), ...(framesPerChunk ? { framesPerChunk } : {}),
       ...(maxRetries !== undefined ? { maxRetries } : {}), ...(chunkDeadlineInSeconds ? { chunkDeadlineSeconds: chunkDeadlineInSeconds } : {}), ...(duplicateStragglers !== undefined ? { duplicateStragglers } : {}),
+      ...(maxHedgeShare !== undefined ? { maxHedgeShare } : {}), ...(stitch ? { stitch } : {}),
     },
   };
 }

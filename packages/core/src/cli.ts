@@ -2,6 +2,7 @@
  * Engine-neutral command line. The HyperFrames example uses it directly; the Remotion package wraps the same calls.
  *
  *   node packages/core/bin/render.mjs local  --engine <engine.ts> --render '<json>' --out out.mp4 [--docker <image>] [--instances N] [--frames-per-chunk N]
+ *                                         [--stitch combine|stream|stream-fmp4] [--max-hedge-share 0.05] [--no-hedge] [--work-dir .render-work] [--keep-work]
  *   node packages/core/bin/render.mjs cloud  --render '<json>' --out out.mp4 [--instances N] [--frames-per-chunk N]      (RENDER_SERVICE_URL, RENDER_SECRET)
  *   node packages/core/bin/render.mjs progress <renderId> | delete <renderId> | info
  */
@@ -33,6 +34,9 @@ export function fleetFromFlags(flags: Record<string, string | true>): FleetOptio
     ...(number('processes-per-instance') ? { processesPerInstance: number('processes-per-instance') } : {}),
     ...(number('frames-per-chunk') ? { framesPerChunk: number('frames-per-chunk') } : {}),
     ...(number('max-retries') !== undefined ? { maxRetries: number('max-retries') } : {}),
+    ...(number('max-hedge-share') !== undefined ? { maxHedgeShare: number('max-hedge-share') } : {}),
+    ...(flags['no-hedge'] ? { duplicateStragglers: false } : {}),
+    ...(flags.stitch === 'stream' || flags.stitch === 'stream-fmp4' || flags.stitch === 'combine' ? { stitch: flags.stitch } : {}),
   };
 }
 export function printer(quiet = false) {
@@ -43,7 +47,7 @@ export async function runLocal(request: JobRequest, flags: Record<string, string
   const out = String(flags.out ?? 'out/local.mp4');
   const result = await renderLocally({
     request, out, onProgress: printer(Boolean(flags.quiet)),
-    fleet: { workDir: resolve(String(flags['work-dir'] ?? '.render-work')), env, ...(typeof flags.docker === 'string' ? { dockerImage: flags.docker, dockerArgs: typeof flags['docker-args'] === 'string' ? flags['docker-args'].split(' ').filter(Boolean) : [] } : { engine: resolve(String(flags.engine)) }) },
+    fleet: { workDir: resolve(String(flags['work-dir'] ?? '.render-work')), env, ...(flags['keep-work'] ? { keepWork: true } : {}), ...(typeof flags.docker === 'string' ? { dockerImage: flags.docker, dockerArgs: typeof flags['docker-args'] === 'string' ? flags['docker-args'].split(' ').filter(Boolean) : [] } : { engine: resolve(String(flags.engine)) }) },
   });
   console.log(JSON.stringify({ out: result.out, frames: result.frames, chunks: result.chunks.total, seconds: (result.timeToFinish ?? 0) / 1000, sizeInBytes: result.outputSizeInBytes, errors: result.errors.map((error) => error.message) }, null, 2));
 }

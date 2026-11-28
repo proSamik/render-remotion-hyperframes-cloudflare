@@ -18,6 +18,11 @@ export type RenderMediaOnCloudflareInput = ServiceInput & Omit<RemotionRenderOpt
   maxRetries?: number;
   /** Seconds before a running chunk is abandoned and rendered again on a fresh instance. */
   chunkDeadlineInSeconds?: number | null;
+  /** A second run for a chunk that is measurably slow, when a slot is free. Default true. */
   duplicateStragglers?: boolean;
+  /** At most this share of the chunks gets a second run, rounded up. Default 0.05. */
+  maxHedgeShare?: number;
+  /** How chunks are joined: 'combine' (combineChunks(), default), 'stream' or 'stream-fmp4' (docs/long-videos.md). */
+  stitch?: 'combine' | 'stream' | 'stream-fmp4';
 };
 export type RenderMediaOnCloudflareOutput = { renderId: string; serviceUrl: string; progressUrl: string; outputUrl: string };

@@ -33,13 +33,27 @@ export type FleetOptions = {
   maxRetries?: number;
   /** Seconds a chunk may run before it is abandoned and re-queued. Default: max(180, frames / 1.5 fps). */
   chunkDeadlineSeconds?: number | null;
-  /** Start a second copy of a chunk that runs far longer than the others when a slot is free. Default true. */
+  /**
+   * Hedging: start a second run of a chunk that is measurably slow (see `hedge()` in coordinator.ts) when nothing is
+   * queued and a slot on another instance is free. Default true.
+   */
   duplicateStragglers?: boolean;
+  /** At most this share of the chunks gets a second run, rounded up. Default 0.05. */
+  maxHedgeShare?: number;
+  /**
+   * How the chunks are joined. 'combine' (default): the engine's own join with every chunk on disk.
+   * 'stream': chunks are fed through a pipe in order and deleted behind it; the output is an MP4 on disk.
+   * 'stream-fmp4': the same with a fragmented MP4 that is uploaded while it is written (needs storage to pay off).
+   */
+  stitch?: StitchMode;
 };
+
+export type StitchMode = 'combine' | 'stream' | 'stream-fmp4';
 
 export type JobRequest = { render: RenderOptions; fleet?: FleetOptions };
 
-export type FileInfo = { name: string; bytes: number; sha256: string };
+/** `md5` is what S3 and R2 answer as the ETag of a single PUT: an upload over a presigned URL is checked against it. */
+export type FileInfo = { name: string; bytes: number; sha256: string; md5?: string };
 
 export type TaskKind = 'chunk' | 'single' | 'still' | 'stitch';
 
@@ -56,9 +70,19 @@ export type TaskRequest = {
   /** First frame of the WHOLE export; the same for every chunk. */
   compositionStart?: number;
   chunkIndex?: number;
+  /** Which run of the chunk this is, from 1. A retry or a hedge is a new run. */
+  run?: number;
+  /**
+   * chunk: base name of the files this run writes (`chunk-0003-r2` -> `.ts` and `.aac`). Every run has its own, on
+   * disk and in object storage, so a run that finishes late can never overwrite the files of the run that won.
+   */
+  outputBase?: string;
   /** stitch: chunk grid. */
   framesPerChunk?: number;
   chunkCount?: number;
+  /** stitch: the files of the run that won, per chunk, video first. Sizes and hashes are checked before the join. */
+  chunks?: { index: number; files: FileInfo[] }[];
+  stitch?: StitchMode;
   /** Concurrent render processes on this instance (lets the engine pick tabs per process). */
   processes?: number;
   /** R2 mode: presigned PUT URL per output file name; the container uploads its own results. */
@@ -74,7 +98,11 @@ export type TaskStatus = {
   framesRendered: number;
   files: FileInfo[];
   error?: string;
-  /** Measured inside the instance: wall seconds of the task and busy vCPU seconds of the whole VM meanwhile. */
+  /**
+   * Measured inside the instance: wall seconds of the task and busy vCPU seconds of the WHOLE VM meanwhile. Two tasks
+   * that share an instance each include the other's CPU, so never add these up for a bill: use the instance's own
+   * counter (`cpuSeconds` of `GET /tasks`), as the coordinator does.
+   */
   wallSeconds?: number;
   cpuSeconds?: number;
   uploaded?: boolean;
@@ -94,7 +122,15 @@ export type Storage = {
   presignGet(key: string, downloadName?: string): Promise<string>;
 };
 
-export type ChunkRun = { instance: string; taskId: string; startedAt: number; framesRendered: number };
+export type ChunkRun = {
+  instance: string; taskId: string; startedAt: number; framesRendered: number;
+  /** Run number of the chunk, from 1. */
+  run: number;
+  hedge?: boolean;
+  /** When the frame count last changed, and when it first left 0. */
+  progressAt: number;
+  firstFrameAt?: number;
+};
 
 export type ChunkState = {
   index: number;
@@ -102,12 +138,23 @@ export type ChunkState = {
   /** exclusive */
   endFrame: number;
   state: 'pending' | 'running' | 'rendered' | 'stored';
+  /** Runs that failed by the chunk's own fault (a render error, a deadline). Limited by `maxRetries`. */
   attempts: number;
+  /** Runs lost with their instance (a restart). Not the chunk's fault: counted apart, with a higher limit. */
+  lost?: number;
+  /** Runs started so far; the next run is `runsStarted + 1`. */
+  runsStarted?: number;
+  hedged?: boolean;
   runs: ChunkRun[];
+  /** The run whose files were kept. */
+  run?: number;
   /** Where the rendered files are (instance name) and what they must hash to. */
   instance?: string;
   files?: FileInfo[];
   renderSeconds?: number;
+  /** Seconds to the first frame and frames per second after it, as the coordinator saw them. They feed the hedge rule. */
+  firstFrameSeconds?: number;
+  fps?: number;
   transferAttempts: number;
 };
 
@@ -120,10 +167,20 @@ export type InstanceState = {
   misses: number;
   gone?: boolean;
   wallSeconds: number;
+  /** Busy vCPU seconds of this instance: the sum of the increases of its own counter. Survives a counter that restarts. */
   cpuSeconds: number;
+  /** The counter as last read. */
+  cpuCounter?: number;
 };
 
-export type JobError = { at: number; chunk?: number; instance?: string; message: string; fatal: boolean };
+/** What happened, as a fixed word: stable enough to group by in an error tracker (see events.ts). */
+export type EventKind =
+  | 'plan_error' | 'instance_start_failed' | 'instance_unresponsive' | 'instance_restarted'
+  | 'chunk_failed' | 'chunk_deadline' | 'chunk_hung' | 'checksum_mismatch' | 'transfer_error' | 'stitch_error'
+  | 'hedge_started' | 'hedge_won' | 'coordinator_error' | 'job_failed' | 'job_cancelled';
+
+/** One entry of `errors` in the progress. Recovered problems are listed too (`fatal: false`). */
+export type JobError = { at: number; kind?: EventKind; chunk?: number; attempt?: number; instance?: string; message: string; fatal: boolean };
 
 export type JobState = {
   id: string;
@@ -142,9 +199,17 @@ export type JobState = {
   instances: InstanceState[];
   nextInstance: number;
   stitcher?: string;
-  stitchTask?: { id: string; startedAt: number; attempts: number };
+  stitchTask?: { id: string; startedAt: number; attempts: number; outputKey?: string };
+  stitchAttempts?: number;
+  stitchersLost?: number;
+  planFailures?: number;
+  hedges?: number;
+  hedgesWon?: number;
+  /** The highest `overallProgress` reported so far: the number never goes back. */
+  progressHigh?: number;
   output?: FileInfo & { instance?: string; key?: string };
   errors: JobError[];
+  /** Sums over finished tasks, for statistics only. `taskCpuSeconds` counts shared instances more than once. */
   taskCpuSeconds: number;
   taskWallSeconds: number;
 };
@@ -158,6 +223,8 @@ export type RenderProgress = {
   framesRendered: number;
   frames: number;
   chunks: { total: number; rendered: number; stored: number; running: number };
+  /** Second runs of slow chunks: how many were started and how many finished first. */
+  hedges: { started: number; won: number };
   instances: number;
   fatalErrorEncountered: boolean;
   errors: JobError[];
@@ -174,6 +241,16 @@ export type Engine = {
   plan(render: RenderOptions): Promise<Plan>;
   /** Renders `task` into `dir` and returns the file names it wrote. kind 'chunk': video first, then audio. */
   render(input: { task: TaskRequest; dir: string; onProgress: (framesRendered: number) => void }): Promise<string[]>;
-  /** Joins the chunk files in `dir` (`chunk-0000.ts`, `chunk-0000.aac`, ...) and returns the output file name. */
-  stitch(input: { task: TaskRequest; dir: string }): Promise<string[]>;
+  /**
+   * Joins the chunks and returns the output file name. The files are named in `task.chunks` (video first, then audio).
+   * `task.stitch` 'combine': every file is already in `dir`. 'stream' / 'stream-fmp4': `chunks.ready(index)` resolves
+   * when the files of that chunk are in `dir` and verified, `chunks.release(index)` deletes them; with 'stream-fmp4'
+   * and `output` the engine pipes the file into `output.write()` instead of writing it to `dir`.
+   */
+  stitch(input: { task: TaskRequest; dir: string; chunks?: ChunkFeed; output?: StreamOutput }): Promise<string[]>;
 };
+
+/** Chunk files arriving in order on the stitcher (chunk-feed.ts). */
+export type ChunkFeed = { ready(index: number): Promise<void>; release(index: number): Promise<void> };
+/** Where a streamed output goes (transfer.ts): the engine never sees a URL. */
+export type StreamOutput = { name: string; write(stream: AsyncIterable<Uint8Array>): Promise<void> };

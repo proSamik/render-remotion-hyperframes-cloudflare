@@ -13,6 +13,7 @@
  * render/still flags: --serve-url --props='<json or file>' --codec --frames=0-299 --scale --jpeg-quality --crf
  *   --video-bitrate --x264-preset --image-format --muted --gl=<angle-egl|swangle|...> --webgl --out=<file>
  *   --concurrency=<instances> --processes-per-instance --frames-per-chunk --max-retries --concurrency-per-process --keep
+ *   --stitch=<combine|stream|stream-fmp4> --max-hedge-share=0.05 --no-hedge
  * Where to render: the service from --service-url / REMOTION_CLOUDFLARE_SERVICE_URL (secret: REMOTION_CLOUDFLARE_SECRET),
  *   or --local (processes on this machine), or --docker=<image> (containers on this machine).
  *   Local flags: --engine=<engine.ts> --sites-dir=build/sites --project-dir=.

@@ -10,5 +10,5 @@
     "allowImportingTsExtensions": true,
     "skipLibCheck": true
   },
-  "include": ["*.ts", "../src/coordinator.ts", "../src/types.ts"]
+  "include": ["*.ts", "../src/coordinator.ts", "../src/events.ts", "../src/s3-presign.ts", "../src/signer.ts", "../src/types.ts"]
 }

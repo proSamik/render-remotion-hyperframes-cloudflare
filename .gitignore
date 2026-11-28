@@ -10,3 +10,5 @@ build/
 *.log
 .DS_Store
 wrangler.test.jsonc
+.render-work-ci/
+.render-work-e2e/

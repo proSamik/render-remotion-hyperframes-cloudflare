@@ -6,6 +6,9 @@
  *   RenderContainer   one per container instance: starts the container (ctx.container) and forwards HTTP to it
  *   R2Gateway         optional: lets a container read and write its own job's objects in R2 without credentials
  *
+ * The containers never hold a key. With a bucket they reach R2 through R2Gateway (default), or, with R2_DIRECT, over
+ * presigned URLs that the coordinator signs for exactly the objects a task needs.
+ *
  * Written against the Durable Object Container API (`ctx.container`, scheduling_policy "durable_object"), which
  * replaced the `Container` class of `@cloudflare/containers` in the Cloudflare docs in November 2026.
  *
@@ -17,8 +20,9 @@
  *   DELETE /renders/<id>              -> stops the instances, deletes the files
  */
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
-import { AwsClient } from 'aws4fetch';
 import { cleanup, createJob, progressOf, step } from '../src/coordinator.ts';
+import { toTrackerEvent } from '../src/events.ts';
+import { createPresigner, type Presigner } from '../src/s3-presign.ts';
 import type { Fleet, JobRequest, JobState, RenderProgress, Storage } from '../src/types.ts';
 
 export type Env = {
@@ -28,11 +32,13 @@ export type Env = {
   RENDER_SECRET?: string;
   /** Optional R2 bucket for chunks and outputs. */
   RENDER_BUCKET?: R2Bucket;
-  /** Optional, only for presigned download URLs: R2 S3 API keys (secrets) and the bucket's S3 endpoint data. */
+  /** Optional, for presigned URLs: R2 S3 API keys (secrets) and the bucket's S3 endpoint data. */
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   R2_ACCOUNT_ID?: string;
   R2_BUCKET_NAME?: string;
+  /** "true": chunks and outputs go straight between the containers and R2 over presigned URLs (needs the four above). */
+  R2_DIRECT?: string;
   SERVICE_NAME?: string;
   INSTANCE_TYPE?: string;
   MAX_INSTANCES_PER_RENDER?: string;
@@ -45,6 +51,15 @@ export type Env = {
 const PORT = 8080;
 const R2_HOST = 'r2.internal';
 const STEP_MS = 1500;
+/** How long a URL in a task is good for. A task is handed out and used within minutes; a long join needs longer. */
+const TASK_URL_SECONDS = 6 * 3600;
+
+/** The presigner for this service's one bucket, or null when the S3 keys are not set. The bucket is never a parameter. */
+function presignerOf(env: Env): Presigner | null {
+  const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID, R2_BUCKET_NAME } = env;
+  if (!R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_ACCOUNT_ID || !R2_BUCKET_NAME) return null;
+  return createPresigner({ endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`, bucket: R2_BUCKET_NAME, accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY });
+}
 
 /** One container instance. The Durable Object name is the instance name the coordinator chose. */
 export class RenderContainer extends DurableObject<Env> {
@@ -120,8 +135,10 @@ export class R2Gateway extends WorkerEntrypoint<Env> {
       return Response.json({ key: object.key, size: object.size });
     }
     if (request.method === 'PUT') {
-      // R2 needs to know the length of a stream: the container always sends Content-Length.
-      const object = await bucket.put(key, request.body);
+      // R2 needs to know the length of a stream: the container always sends Content-Length. With the SHA-256 of the
+      // file in `x-sha256`, R2 itself refuses a body that arrived damaged.
+      const sha256 = request.headers.get('x-sha256');
+      const object = await bucket.put(key, request.body, /^[0-9a-f]{64}$/.test(sha256 ?? '') ? { sha256: sha256! } : {});
       return Response.json({ key: object?.key, size: object?.size });
     }
     return new Response('method not allowed', { status: 405 });
@@ -147,7 +164,11 @@ export class RenderJob extends DurableObject<Env> {
   }
   private storage(): Storage | null {
     if (!this.env.RENDER_BUCKET) return null;
-    // Not presigned at all: inside the container these URLs are intercepted and answered by R2Gateway.
+    // Direct: real presigned URLs, one per object a task reads or writes. The keys the coordinator asks for are all
+    // under renders/<this render>/ (objectKey() in ../src/coordinator.ts); the presigner knows one bucket only.
+    const presigner = this.env.R2_DIRECT === 'true' ? presignerOf(this.env) : null;
+    if (presigner) return { presignPut: (key) => presigner.presign('PUT', key, {}, TASK_URL_SECONDS), presignGet: (key) => presigner.presign('GET', key, {}, TASK_URL_SECONDS) };
+    // Default, not presigned at all: inside the container these URLs are intercepted and answered by R2Gateway.
     return { presignPut: async (key) => `http://${R2_HOST}/${key}`, presignGet: async (key) => `http://${R2_HOST}/${key}` };
   }
   private load = () => this.ctx.storage.get<JobState>('job');
@@ -168,8 +189,12 @@ export class RenderJob extends DurableObject<Env> {
       await this.ctx.storage.setAlarm(Date.now() + 60_000);
       return;
     }
+    const known = new Set(job.errors);
     await step(job, this.fleet(job), this.storage());
     await this.ctx.storage.put('job', job);
+    // One JSON line per new event: Workers Logs can filter on `kind`, and a Tail Worker or Logpush can forward them
+    // to an error tracker (docs/failures.md).
+    for (const error of job.errors) if (!known.has(error)) console.log(JSON.stringify(toTrackerEvent(job.id, error, { phase: job.phase, service: this.env.SERVICE_NAME ?? 'render-service' })));
     await this.ctx.storage.setAlarm(Date.now() + ((job.phase as string) === 'done' ? 60_000 : STEP_MS));
   }
 
@@ -187,14 +212,9 @@ export class RenderJob extends DurableObject<Env> {
     const headers = { 'content-type': type, 'content-length': String(job.output.bytes), 'content-disposition': `attachment; filename="${name}"`, 'x-sha256': job.output.sha256 };
     const presign = new URL(request.url).searchParams.get('presign');
     if (presign) {
-      const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID, R2_BUCKET_NAME } = this.env;
-      if (!job.output.key || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_ACCOUNT_ID || !R2_BUCKET_NAME) return new Response('presigned URLs need an R2 bucket and R2 S3 API keys on the service', { status: 501 });
-      const client = new AwsClient({ accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY, service: 's3', region: 'auto' });
-      const target = new URL(`https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}/${job.output.key}`);
-      target.searchParams.set('X-Amz-Expires', String(Math.max(1, Math.min(604800, Number(presign) || 3600))));
-      target.searchParams.set('response-content-disposition', `attachment; filename="${name}"`);
-      const signed = await client.sign(new Request(target, { method: 'GET' }), { aws: { signQuery: true } });
-      return Response.json({ url: signed.url });
+      const presigner = presignerOf(this.env);
+      if (!job.output.key || !presigner) return new Response('presigned URLs need an R2 bucket and R2 S3 API keys on the service', { status: 501 });
+      return Response.json({ url: await presigner.presign('GET', job.output.key, { 'response-content-disposition': `attachment; filename="${name}"` }, Number(presign) || 3600) });
     }
     if (job.output.key) {
       const object = await this.env.RENDER_BUCKET!.get(job.output.key);
@@ -209,7 +229,13 @@ export class RenderJob extends DurableObject<Env> {
     const job = await this.load();
     if (!job) return;
     await cleanup(job, this.fleet(job));
-    if (this.env.RENDER_BUCKET) { const listed = await this.env.RENDER_BUCKET.list({ prefix: `renders/${job.id}/` }); if (listed.objects.length) await this.env.RENDER_BUCKET.delete(listed.objects.map((object) => object.key)); }
+    // Every run of a chunk has its own objects, and a long render has thousands: a listing returns at most 1000 at a time.
+    for (let cursor: string | undefined, more = Boolean(this.env.RENDER_BUCKET); more;) {
+      const listed = await this.env.RENDER_BUCKET!.list({ prefix: `renders/${job.id}/`, ...(cursor ? { cursor } : {}) });
+      if (listed.objects.length) await this.env.RENDER_BUCKET!.delete(listed.objects.map((object) => object.key));
+      more = listed.truncated;
+      cursor = listed.truncated ? listed.cursor : undefined;
+    }
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
   }
