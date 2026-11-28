@@ -161,8 +161,8 @@ This repository's small examples, cold start and join included:
 | HyperFrames example, 8 s | 1 | 17 s | $0.0011 |
 | Mixed example, 8 s | 2 | 35 s | $0.0027 |
 
-Heavier, real content, measured earlier on the same platform while building the renderer of the
-[Subclip](https://subclip.app) video editor (render only):
+Heavier, real content, measured earlier on the same platform in the private prototype this design comes from
+(render only):
 
 | Content | $ per output minute |
 | --- | --- |
